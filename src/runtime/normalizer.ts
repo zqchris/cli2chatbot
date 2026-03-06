@@ -17,6 +17,7 @@ function getNestedText(value: unknown): string | null {
   if (value && typeof value === "object") {
     const candidate = value as Record<string, unknown>;
     return (
+      getNestedText(candidate.item) ??
       getNestedText(candidate.text) ??
       getNestedText(candidate.delta) ??
       getNestedText(candidate.message) ??
@@ -29,6 +30,19 @@ function getNestedText(value: unknown): string | null {
 }
 
 function classifyPayloadType(payload: Record<string, unknown>): NormalizedTextEventType {
+  const item = payload.item;
+  if (item && typeof item === "object") {
+    const nestedType = String((item as Record<string, unknown>).type ?? "").toLowerCase();
+    if (nestedType === "agent_message") {
+      return "final_text";
+    }
+    if (nestedType.includes("tool")) {
+      return "tool_event";
+    }
+    if (nestedType.includes("error") || nestedType.includes("fail")) {
+      return "error";
+    }
+  }
   const maybeType = String(payload.type ?? payload.event ?? "").toLowerCase();
   if (payload.error || maybeType.includes("error") || maybeType.includes("fail")) {
     return "error";
@@ -45,14 +59,46 @@ function classifyPayloadType(payload: Record<string, unknown>): NormalizedTextEv
   return "partial_text";
 }
 
-function normalizeLine(taskId: string, line: string, timestamp: string): StreamEvent {
+function shouldIgnoreCodexPayload(payload: Record<string, unknown>): boolean {
+  const type = String(payload.type ?? payload.event ?? "").toLowerCase();
+  if (type === "thread.started" || type === "turn.started" || type === "turn.completed") {
+    return true;
+  }
+  const item = payload.item;
+  if (item && typeof item === "object") {
+    const record = item as Record<string, unknown>;
+    const message = getNestedText(record.message) ?? getNestedText(record.text) ?? "";
+    if (
+      record.type === "error" &&
+      message.includes("Under-development features enabled: fast_mode")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function shouldIgnorePlainLine(runtime: RuntimeKind, line: string): boolean {
+  if (runtime !== "codex") {
+    return false;
+  }
+  return line.includes("codex_core::shell_snapshot: Failed to delete shell snapshot");
+}
+
+function normalizeLine(runtime: RuntimeKind, taskId: string, line: string, timestamp: string): StreamEvent | null {
   try {
     const payload = JSON.parse(line) as Record<string, unknown>;
+    if (runtime === "codex" && shouldIgnoreCodexPayload(payload)) {
+      return null;
+    }
     const type = classifyPayloadType(payload);
     const fallbackText = payload.error ? String(payload.error) : JSON.stringify(payload);
     const text = (getNestedText(payload) ?? fallbackText).trim();
     return { type, taskId, text, timestamp };
   } catch {
+    if (shouldIgnorePlainLine(runtime, line)) {
+      return null;
+    }
     return { type: "partial_text", taskId, text: line.trim(), timestamp };
   }
 }
@@ -70,7 +116,9 @@ export function normalizeRuntimeChunk(runtime: RuntimeKind, taskId: string, chun
   // Runtime-aware parser selection can be expanded later.
   // For now, both runtimes are line-oriented JSON streams with text fallback.
   if (runtime === "codex" || runtime === "claude") {
-    return lines.map((line) => normalizeLine(taskId, line, timestamp));
+    return lines
+      .map((line) => normalizeLine(runtime, taskId, line, timestamp))
+      .filter((event): event is StreamEvent => Boolean(event));
   }
 
   return lines.map((line) => ({ type: "partial_text", taskId, text: line, timestamp }));
