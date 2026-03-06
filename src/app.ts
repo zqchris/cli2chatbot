@@ -35,6 +35,7 @@ type PendingAuthPayload = {
 
 const TELEGRAM_NATIVE_COMMANDS = [
   { command: "help", description: "显示命令帮助" },
+  { command: "menu", description: "显示按钮菜单" },
   { command: "status", description: "查看 bridge 状态" },
   { command: "instances", description: "列出全部实例" },
   { command: "current", description: "查看当前实例" },
@@ -186,7 +187,8 @@ export class BridgeApp {
     await this.store.write(state);
     await this.telegram.sendMessage(
       pending.chatId,
-      "已通过本机面板授权。现在可以直接使用 /help 查看命令。"
+      "已通过本机面板授权。现在可以直接使用 /help 查看命令。",
+      { replyMarkup: mainCommandKeyboard() }
     ).catch(() => undefined);
     return { ok: true, message: `Approved ${userId}.`, data: { userId } };
   }
@@ -362,10 +364,11 @@ export class BridgeApp {
   }
 
   private async handleTelegramCommand(ctx: TelegramContext, text: string): Promise<void> {
-    if (text === "/help") {
+    if (text === "/help" || text === "/menu") {
       await this.telegram.sendMessage(
         ctx.chatId,
         [
+          "/menu",
           "/status",
           "/instances",
           "/current",
@@ -384,7 +387,8 @@ export class BridgeApp {
           "/kill",
           "/logs",
           "/web"
-        ].join("\n")
+        ].join("\n"),
+        { replyMarkup: mainCommandKeyboard() }
       );
       return;
     }
@@ -410,7 +414,8 @@ export class BridgeApp {
               const marker = current?.instanceId === instance.instanceId ? "👉 " : "";
               return `${marker}${instance.instanceId} ${instance.runtime} ${instance.status} cwd=${instance.cwd}`;
             })
-            .join("\n")
+            .join("\n"),
+        { replyMarkup: instancesCommandKeyboard(instances) }
       );
       return;
     }
@@ -597,7 +602,8 @@ export class BridgeApp {
             "- /model <codex|claude> <model>",
             "- /model default（清除 --model，回到 CLI 默认）",
             "示例：/model opus"
-          ].join("\n")
+          ].join("\n"),
+          { replyMarkup: modelCommandKeyboard(runtime) }
         );
         return;
       }
@@ -1172,6 +1178,52 @@ async function assertDirectory(cwd: string): Promise<void> {
   if (!info.isDirectory()) {
     throw new Error(`不是目录：${cwd}`);
   }
+}
+
+function mainCommandKeyboard(): Record<string, unknown> {
+  return {
+    keyboard: [
+      [{ text: "/menu" }, { text: "/status" }, { text: "/instances" }],
+      [{ text: "/start_codex" }, { text: "/start_claude" }, { text: "/current" }],
+      [{ text: "/cwd" }, { text: "/model" }, { text: "/args" }],
+      [{ text: "/stop" }, { text: "/reset" }, { text: "/kill" }],
+      [{ text: "/logs" }, { text: "/web" }]
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+    input_field_placeholder: "直接输入文本即可提问；或点按钮执行命令"
+  };
+}
+
+function instancesCommandKeyboard(instances: InstanceRecord[]): Record<string, unknown> {
+  const baseRows: Array<Array<{ text: string }>> = [
+    [{ text: "/instances" }, { text: "/current" }, { text: "/cwd" }],
+    [{ text: "/stop" }, { text: "/reset" }, { text: "/kill" }]
+  ];
+  const useRows = instances.slice(0, 6).map((instance) => [{ text: `/use ${instance.instanceId}` }]);
+  return {
+    keyboard: [...useRows, ...baseRows],
+    resize_keyboard: true,
+    is_persistent: true
+  };
+}
+
+function modelCommandKeyboard(runtime: RuntimeKind): Record<string, unknown> {
+  const options = runtime === "claude"
+    ? ["default", "sonnet", "opus", "haiku"]
+    : ["default", "gpt-5", "gpt-5-mini"];
+  const firstRow = options.slice(0, 2).map((name) => ({ text: `/model ${runtime} ${name}` }));
+  const secondRow = options.slice(2).map((name) => ({ text: `/model ${runtime} ${name}` }));
+  const rows: Array<Array<{ text: string }>> = [firstRow];
+  if (secondRow.length > 0) {
+    rows.push(secondRow);
+  }
+  rows.push([{ text: "/model" }, { text: "/args" }]);
+  return {
+    keyboard: rows,
+    resize_keyboard: true,
+    is_persistent: true
+  };
 }
 
 async function assertPortAvailable(host: string, port: number): Promise<void> {

@@ -180,6 +180,7 @@ daemon 运行后，可以在 Telegram 私聊里发送：
 
 ```text
 /help
+/menu
 /status
 /instances
 /current
@@ -203,6 +204,7 @@ daemon 运行后，可以在 Telegram 私聊里发送：
 命令说明：
 
 - `/start_codex` 和 `/start_claude`：创建新的逻辑实例
+- `/menu`：显示 Telegram 按钮菜单（实例、模型、控制指令）
 - `/use <instanceId>`：切换当前选中实例
 - `/cwd`：查看当前实例工作目录；`/cwd <path>` 可切换到新目录
 - 已选中实例后，也可以直接发送普通文本，不必一定使用 `/ask`
