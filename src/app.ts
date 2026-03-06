@@ -283,6 +283,7 @@ export class BridgeApp {
       let draftText = "";
       let finalText = "";
       let spinnerIndex = 0;
+      let toolSteps = 0;
       const draft = createDraftStreamLoop({
         throttleMs: 1200,
         isStopped: () => stopped,
@@ -298,16 +299,20 @@ export class BridgeApp {
           spinnerIndex += 1;
           const elapsed = spinnerIndex * 4;
           const frame = loadingFrame(spinnerIndex);
+          const stepText = toolSteps > 0 ? ` · steps ${toolSteps}` : "";
           void this.telegram.editMessageText(
             ctx.chatId,
             ack.message_id,
-            `已接收任务，正在发送到 ${instance.runtime}:${instance.instanceId} ... ${frame} ${elapsed}s`
+            `已接收任务，正在发送到 ${instance.runtime}:${instance.instanceId} ... ${frame} ${elapsed}s${stepText}`
           ).catch(() => undefined);
         }
       }, 4000);
 
       const task = await this.supervisor.ask(instance.instanceId, prompt, async (event) => {
         await this.handleTelegramTaskEvent(ctx.chatId, ack.message_id, instance.instanceId, event);
+        if (event.type === "tool_event") {
+          toolSteps += 1;
+        }
         const displayChunk = formatTelegramDisplayChunk(event);
         if (displayChunk) {
           draftText = mergeDraftText(draftText, displayChunk, event.type);
@@ -425,16 +430,7 @@ function loadingFrame(index: number): string {
 }
 
 function formatTelegramDisplayChunk(event: StreamEvent): string | null {
-  if (event.type === "status") {
-    return null;
-  }
-  if (event.type === "final_text") {
-    return null;
-  }
-  if (event.type === "tool_event") {
-    return null;
-  }
-  if (event.type === "partial_text" || event.type === "error") {
+  if (event.type === "error") {
     return sanitizeDisplayText(event.text, false);
   }
   return null;
@@ -496,23 +492,7 @@ function sanitizeFinalTelegramText(input: string): string | null {
   if (!base) {
     return null;
   }
-  const filtered = base
-    .split(/\r?\n/)
-    .filter((line) => {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        return true;
-      }
-      if (/^[•*-]?\s*(ran|explored)\b/i.test(trimmed)) {
-        return false;
-      }
-      if (/^[└├│]\s*(read|list|search|ran)\b/i.test(trimmed.toLowerCase())) {
-        return false;
-      }
-      return true;
-    })
-    .join("\n")
-    .trim();
+  const filtered = stripExecutionScaffold(base);
 
   if (!filtered) {
     return null;
@@ -528,6 +508,40 @@ function truncateLongCodeBlocks(input: string, maxBlockChars: number): string {
     }
     return `\`\`\`${body.slice(0, maxBlockChars)}\n... (代码块过长，已截断)\n\`\`\``;
   });
+}
+
+function stripExecutionScaffold(input: string): string {
+  const output: string[] = [];
+  let previousBlank = false;
+  for (const line of input.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed && isExecutionTraceLine(trimmed)) {
+      continue;
+    }
+    if (!trimmed) {
+      if (previousBlank) {
+        continue;
+      }
+      previousBlank = true;
+      output.push("");
+      continue;
+    }
+    previousBlank = false;
+    output.push(line);
+  }
+  return output.join("\n").trim();
+}
+
+function isExecutionTraceLine(trimmed: string): boolean {
+  const lower = trimmed.toLowerCase();
+  return (
+    /^(\d+\s*→)/.test(trimmed) ||
+    /^[-─]{6,}$/.test(trimmed) ||
+    /^\(no output\)$/i.test(trimmed) ||
+    /^([•●]\s*)?(bash|ran|running|explored|read|search|list|apply_patch|command|tool loaded)\b/i.test(trimmed) ||
+    /^[└├│]/.test(trimmed) ||
+    lower.includes("终端兼容模式已启用，正在继续执行任务")
+  );
 }
 
 function isTransportMetaLine(line: string): boolean {
