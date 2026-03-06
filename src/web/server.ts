@@ -53,6 +53,7 @@ export async function createWebServer(app: BridgeApp) {
         <div class="tips">/start_codex
 /start_claude
 /use &lt;instanceId&gt;
+/cwd &lt;path&gt;
 /ask &lt;prompt&gt;
 /stop
 /reset
@@ -117,6 +118,13 @@ export async function createWebServer(app: BridgeApp) {
         await action('批准授权', () => postJson('/api/auth/approve/' + userId));
       }
 
+      window.revokeAuth = async function(userId) {
+        if (!confirm('确认撤销用户 ' + userId + ' 的授权吗？')) {
+          return;
+        }
+        await action('撤销授权', () => postJson('/api/auth/revoke/' + userId));
+      }
+
       window.showLogs = async function(instanceId) {
         try {
           const res = await fetch('/api/instances/' + instanceId + '/logs');
@@ -133,15 +141,22 @@ export async function createWebServer(app: BridgeApp) {
       }
 
       async function load() {
-        const [statusRes, instancesRes, authRes] = await Promise.all([fetch('/api/status'), fetch('/api/instances'), fetch('/api/auth/pending')]);
+        const [statusRes, instancesRes, authPendingRes, authAllowedRes] = await Promise.all([
+          fetch('/api/status'),
+          fetch('/api/instances'),
+          fetch('/api/auth/pending'),
+          fetch('/api/auth/allowed')
+        ]);
         const status = await statusRes.json();
         const instances = await instancesRes.json();
-        const auth = await authRes.json();
+        const authPending = await authPendingRes.json();
+        const authAllowed = await authAllowedRes.json();
         const state = status.data;
         const rows = instances.data.map((instance) => '<tr>' +
           '<td>' + instance.instanceId + '</td>' +
           '<td>' + instance.runtime + '</td>' +
           '<td>' + instance.status + '</td>' +
+          '<td>' + instance.cwd + '</td>' +
           '<td>' + (instance.currentTaskId || '-') + '</td>' +
           '<td>' + instance.lastActiveAt + '</td>' +
           '<td><div class="ops">' +
@@ -152,20 +167,38 @@ export async function createWebServer(app: BridgeApp) {
             '<button class="btn small" onclick="showLogs(\\'' + instance.instanceId + '\\')">日志</button>' +
           '</div></td>' +
           '</tr>').join('');
-        const authRows = auth.data.map((request) => '<tr>' +
+        const authRows = authPending.data.map((request) => '<tr>' +
           '<td>' + request.userId + '</td>' +
           '<td>' + ((request.firstName || '-') + (request.username ? ' (@' + request.username + ')' : '')) + '</td>' +
           '<td>' + request.requestedAt + '</td>' +
           '<td>' + (request.lastSeenText || '-') + '</td>' +
           '<td><button class="btn small" onclick="approveAuth(\\'' + request.userId + '\\')">批准</button></td>' +
           '</tr>').join('');
+        const allowedRows = authAllowed.data.map((user) => '<tr>' +
+          '<td>' + user.userId + '</td>' +
+          '<td>' + ((user.firstName || '-') + (user.username ? ' (@' + user.username + ')' : '')) + '</td>' +
+          '<td>' + user.connectionStatus + '</td>' +
+          '<td>' + (user.boundInstances || 0) + '</td>' +
+          '<td>' + (user.lastSeenAt || '-') + '</td>' +
+          '<td>' + (user.lastSeenText || '-') + '</td>' +
+          '<td><button class="btn small danger" onclick="revokeAuth(\\'' + user.userId + '\\')">踢掉</button></td>' +
+          '</tr>').join('');
+        const onlineUsers = authAllowed.data.filter((user) => user.connectionStatus === 'online' || user.connectionStatus === 'running').length;
         document.getElementById('app').innerHTML =
           '<div class="grid">' +
             '<div class="card"><div class="label">daemon 进程</div><div class="value">' + (state.daemon.pid || '-') + '</div></div>' +
             '<div class="card"><div class="label">实例数量</div><div class="value">' + state.instances.length + '</div></div>' +
             '<div class="card"><div class="label">任务数量</div><div class="value">' + state.tasks.length + '</div></div>' +
-            '<div class="card"><div class="label">待授权请求</div><div class="value">' + auth.data.length + '</div></div>' +
+            '<div class="card"><div class="label">待授权请求</div><div class="value">' + authPending.data.length + '</div></div>' +
+            '<div class="card"><div class="label">授权用户</div><div class="value">' + authAllowed.data.length + '</div></div>' +
+            '<div class="card"><div class="label">在线授权用户</div><div class="value">' + onlineUsers + '</div></div>' +
+            '<div class="card"><div class="label">Telegram 最近更新</div><div class="value" style="font-size:13px;">' + (state.daemon.lastTelegramUpdateAt || '-') + '</div></div>' +
+            '<div class="card"><div class="label">Telegram 错误</div><div class="value" style="font-size:13px;">' + (state.daemon.lastTelegramError || '-') + '</div></div>' +
           '</div>' +
+          '<div class="section-title">已授权 Telegram 用户</div>' +
+          '<table><thead><tr><th>User ID</th><th>账号</th><th>连接</th><th>绑定实例</th><th>最近活跃</th><th>最近消息</th><th>操作</th></tr></thead><tbody>' +
+            (allowedRows || '<tr><td colspan="7">当前没有授权用户。</td></tr>') +
+          '</tbody></table>' +
           '<div class="section-title">待授权 Telegram 用户</div>' +
           '<table><thead><tr><th>User ID</th><th>账号</th><th>请求时间</th><th>最近消息</th><th>操作</th></tr></thead><tbody>' +
             (authRows || '<tr><td colspan="5">当前没有待授权请求。</td></tr>') +
@@ -175,8 +208,8 @@ export async function createWebServer(app: BridgeApp) {
             '<button class="btn" onclick="createInstance(\\'codex\\')">新建 Codex 实例</button>' +
             '<button class="btn" onclick="createInstance(\\'claude\\')">新建 Claude 实例</button>' +
           '</div>' +
-          '<table><thead><tr><th>ID</th><th>运行时</th><th>状态</th><th>当前任务</th><th>最后活跃</th><th>操作</th></tr></thead><tbody>' +
-            (rows || '<tr><td colspan="6">当前还没有实例。</td></tr>') +
+          '<table><thead><tr><th>ID</th><th>运行时</th><th>状态</th><th>工作目录</th><th>当前任务</th><th>最后活跃</th><th>操作</th></tr></thead><tbody>' +
+            (rows || '<tr><td colspan="7">当前还没有实例。</td></tr>') +
           '</tbody></table>' +
           '<div class="section-title">最近输出预览</div>' +
           '<div class="log">' + (state.tasks[0]?.outputPreview || '当前还没有任务输出。') + '</div>';
@@ -191,8 +224,12 @@ export async function createWebServer(app: BridgeApp) {
   server.get("/api/status", async () => app.commandStatus());
   server.get("/api/instances", async () => app.commandInstances());
   server.get("/api/auth/pending", async () => app.commandPendingAuth());
+  server.get("/api/auth/allowed", async () => app.commandAuthorizedUsers());
   server.post<{ Params: { userId: string } }>("/api/auth/approve/:userId", async (request) =>
     app.commandApproveAuth(request.params.userId)
+  );
+  server.post<{ Params: { userId: string } }>("/api/auth/revoke/:userId", async (request) =>
+    app.commandRevokeAuth(request.params.userId)
   );
   server.post<{ Body: { runtime: "codex" | "claude" } }>("/api/instances", async (request) => {
     return app.commandCreateInstance(request.body.runtime);

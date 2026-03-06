@@ -59,6 +59,15 @@ export type PendingAuthRequest = {
   lastSeenText: string | null;
 };
 
+export type KnownTelegramUser = {
+  userId: string;
+  chatId: string;
+  username: string | null;
+  firstName: string | null;
+  lastSeenAt: string;
+  lastSeenText: string | null;
+};
+
 export type RuntimeConfig = {
   path: string;
   defaultArgs: string[];
@@ -91,12 +100,15 @@ export type PersistedState = {
   currentInstanceId: string | null;
   currentInstanceByRuntime: Partial<Record<RuntimeKind, string>>;
   pendingAuthRequests: PendingAuthRequest[];
+  knownTelegramUsers: KnownTelegramUser[];
   instances: InstanceRecord[];
   tasks: TaskRecord[];
   daemon: {
     pid: number | null;
     startedAt: string | null;
     lastHeartbeatAt: string | null;
+    lastTelegramUpdateAt: string | null;
+    lastTelegramError: string | null;
   };
 };
 

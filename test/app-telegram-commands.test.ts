@@ -199,4 +199,49 @@ describe("telegram command handling", () => {
     expect(messages[1]).toContain("已清除 claude 模型参数");
     expect(app.config.runtimes.claude.defaultArgs).toEqual([]);
   });
+
+  it("supports /cwd to update selected instance working directory", async () => {
+    const userId = "10006";
+    const chatId = userId;
+    const app = await createIsolatedApp(userId);
+    const messages: string[] = [];
+    app.telegram = {
+      sendMessage: async (_chatId: string, text: string) => {
+        messages.push(text);
+        return { message_id: messages.length };
+      },
+      editMessageText: async () => ({ message_id: 1 }),
+      sendTyping: async () => true
+    };
+
+    const instance = await app.createInstance("codex");
+    const targetDir = await mkdtemp(path.join(os.tmpdir(), "cli2chatbot-cwd-"));
+    tempDirs.push(targetDir);
+    await app.handleUpdate(makeTelegramUpdate(8, userId, chatId, `/cwd ${targetDir}`));
+
+    const updated = await app.supervisor.getInstance(instance.instanceId);
+    expect(updated.cwd).toBe(targetDir);
+    expect(messages.at(-1)).toContain("已设置 codex");
+  });
+
+  it("lists and revokes authorized users", async () => {
+    const userId = "10007";
+    const chatId = userId;
+    const app = await createIsolatedApp(userId);
+    app.telegram = {
+      sendMessage: async () => ({ message_id: 1 }),
+      editMessageText: async () => ({ message_id: 1 }),
+      sendTyping: async () => true
+    };
+
+    await app.handleUpdate(makeTelegramUpdate(9, userId, chatId, "/status"));
+    const before = await app.commandAuthorizedUsers();
+    expect(before.ok).toBe(true);
+    expect(before.data?.some((item: { userId: string }) => item.userId === userId)).toBe(true);
+
+    const revoked = await app.commandRevokeAuth(userId);
+    expect(revoked.ok).toBe(true);
+    const after = await app.commandAuthorizedUsers();
+    expect(after.data).toEqual([]);
+  });
 });

@@ -1,8 +1,19 @@
 import { execFileSync } from "node:child_process";
 import net from "node:net";
 import { randomUUID } from "node:crypto";
-import { unlink, writeFile } from "node:fs/promises";
-import type { AppConfig, CommandResult, DoctorResult, InstanceRecord, PersistedState, RuntimeKind, StreamEvent } from "./domain/types.js";
+import { stat, unlink, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type {
+  AppConfig,
+  CommandResult,
+  DoctorResult,
+  InstanceRecord,
+  KnownTelegramUser,
+  PersistedState,
+  RuntimeKind,
+  StreamEvent
+} from "./domain/types.js";
 import { ensureAppDir, saveConfig } from "./config.js";
 import { StateStore } from "./store.js";
 import { InstanceSupervisor } from "./runtime/supervisor.js";
@@ -30,6 +41,7 @@ const TELEGRAM_NATIVE_COMMANDS = [
   { command: "start_codex", description: "创建 codex 实例" },
   { command: "start_claude", description: "创建 claude 实例" },
   { command: "use", description: "切换实例: /use <id>" },
+  { command: "cwd", description: "设置工作目录: /cwd [path]" },
   { command: "ask", description: "向当前实例提问" },
   { command: "args", description: "查看运行参数" },
   { command: "setargs", description: "设置参数: /setargs <runtime> <args>" },
@@ -179,6 +191,76 @@ export class BridgeApp {
     return { ok: true, message: `Approved ${userId}.`, data: { userId } };
   }
 
+  async commandRevokeAuth(userId: string): Promise<CommandResult<{ userId: string }>> {
+    if (!this.config.telegram.allowedUserIds.includes(userId)) {
+      return { ok: false, message: `User ${userId} is not authorized.` };
+    }
+
+    this.config.telegram.allowedUserIds = this.config.telegram.allowedUserIds.filter((candidate) => candidate !== userId);
+    await saveConfig(this.config);
+
+    const state = await this.store.read();
+    state.pendingAuthRequests = state.pendingAuthRequests.filter((candidate) => candidate.userId !== userId);
+    for (const instance of state.instances) {
+      if (instance.telegramMessageBinding?.chatId === userId) {
+        instance.telegramMessageBinding = null;
+      }
+    }
+    await this.store.write(state);
+
+    await this.telegram.sendMessage(
+      userId,
+      "当前 Telegram 账号已被本机管理员撤销授权。若需恢复，请重新发消息并在本地面板批准。"
+    ).catch(() => undefined);
+
+    return { ok: true, message: `Revoked ${userId}.`, data: { userId } };
+  }
+
+  async commandAuthorizedUsers(): Promise<CommandResult<Array<{
+    userId: string;
+    username: string | null;
+    firstName: string | null;
+    lastSeenAt: string | null;
+    lastSeenText: string | null;
+    chatId: string | null;
+    connectionStatus: "online" | "idle" | "running" | "unknown";
+    boundInstances: number;
+  }>>> {
+    const state = await this.store.read();
+    const now = Date.now();
+    const knownById = new Map<string, KnownTelegramUser>();
+    for (const user of state.knownTelegramUsers) {
+      knownById.set(user.userId, user);
+    }
+
+    const data = this.config.telegram.allowedUserIds.map((userId) => {
+      const known = knownById.get(userId);
+      const bound = state.instances.filter((instance) => instance.telegramMessageBinding?.chatId === userId);
+      const lastSeenAt = known?.lastSeenAt ?? null;
+      const lastSeenMs = lastSeenAt ? Date.parse(lastSeenAt) : Number.NaN;
+      let connectionStatus: "online" | "idle" | "running" | "unknown" = "unknown";
+      if (bound.some((instance) => instance.status === "running")) {
+        connectionStatus = "running";
+      } else if (Number.isFinite(lastSeenMs)) {
+        connectionStatus = now - (lastSeenMs as number) <= 10 * 60 * 1000 ? "online" : "idle";
+      } else if (bound.length > 0) {
+        connectionStatus = "idle";
+      }
+
+      return {
+        userId,
+        username: known?.username ?? null,
+        firstName: known?.firstName ?? null,
+        lastSeenAt,
+        lastSeenText: known?.lastSeenText ?? null,
+        chatId: known?.chatId ?? null,
+        connectionStatus,
+        boundInstances: bound.length
+      };
+    });
+    return { ok: true, message: "ok", data };
+  }
+
   async runTelegramLoop(): Promise<void> {
     await this.supervisor.recoverOrphans();
     await this.syncTelegramCommandMenu();
@@ -186,7 +268,9 @@ export class BridgeApp {
       let updates: Array<Record<string, unknown>> = [];
       try {
         updates = await this.telegram.getUpdates(this.pollOffset);
+        await this.markTelegramLoopHealthy();
       } catch {
+        await this.markTelegramLoopError("getUpdates failed");
         await delay(1500);
         continue;
       }
@@ -219,6 +303,14 @@ export class BridgeApp {
     const chatType = typeof chat.type === "string" ? chat.type : "";
     const chatId = chat.id == null ? "" : String(chat.id);
     const userId = from.id == null ? "" : String(from.id);
+    await this.upsertKnownUser({
+      chatId,
+      userId,
+      username: typeof from.username === "string" ? from.username : null,
+      firstName: typeof from.first_name === "string" ? from.first_name : null,
+      text
+    });
+
     if (chatType !== "private") {
       await this.telegram.sendMessage(chatId, "只支持 Telegram 私聊 DM。");
       return;
@@ -280,6 +372,7 @@ export class BridgeApp {
           "/start_codex",
           "/start_claude",
           "/use <id>",
+          "/cwd [path]",
           "/ask <text>",
           "/args [codex|claude]",
           "/setargs <runtime> <args...>",
@@ -369,6 +462,40 @@ export class BridgeApp {
       const instance = await this.supervisor.getInstance(instanceId);
       await this.supervisor.setCurrentInstance(instance.runtime, instanceId);
       await this.telegram.sendMessage(ctx.chatId, `已切换到 ${instance.runtime} 实例 ${instanceId}`);
+      return;
+    }
+
+    if (text === "/cwd" || text.startsWith("/cwd ")) {
+      const current = await this.supervisor.selectedInstance();
+      if (!current) {
+        await this.telegram.sendMessage(ctx.chatId, "当前没有实例。先 /start_codex 或 /start_claude。");
+        return;
+      }
+      if (text === "/cwd") {
+        await this.telegram.sendMessage(
+          ctx.chatId,
+          [
+            `当前实例: ${current.instanceId} (${current.runtime})`,
+            `当前 cwd: ${current.cwd}`,
+            "用法：/cwd <path>",
+            "示例：/cwd ~/Projects/Github/zqchris/cli2chatbot"
+          ].join("\n")
+        );
+        return;
+      }
+
+      const rawPath = text.slice("/cwd ".length).trim();
+      if (!rawPath) {
+        await this.telegram.sendMessage(ctx.chatId, "用法：/cwd <path>");
+        return;
+      }
+      const nextCwd = resolveWorkdir(rawPath, current.cwd, this.config.runtimes.defaultCwd);
+      await assertDirectory(nextCwd);
+      const updated = await this.supervisor.setInstanceCwd(current.instanceId, nextCwd);
+      await this.telegram.sendMessage(
+        ctx.chatId,
+        `已设置 ${updated.runtime}:${updated.instanceId} 工作目录为\n${updated.cwd}`
+      );
       return;
     }
 
@@ -661,6 +788,41 @@ export class BridgeApp {
         lastSeenText: payload.text
       });
     }
+    await this.store.write(state);
+  }
+
+  private async upsertKnownUser(payload: PendingAuthPayload): Promise<void> {
+    const state = await this.store.read();
+    const existing = state.knownTelegramUsers.find((candidate) => candidate.userId === payload.userId);
+    if (existing) {
+      existing.chatId = payload.chatId;
+      existing.username = payload.username;
+      existing.firstName = payload.firstName;
+      existing.lastSeenAt = new Date().toISOString();
+      existing.lastSeenText = payload.text;
+    } else {
+      state.knownTelegramUsers.unshift({
+        userId: payload.userId,
+        chatId: payload.chatId,
+        username: payload.username,
+        firstName: payload.firstName,
+        lastSeenAt: new Date().toISOString(),
+        lastSeenText: payload.text
+      });
+    }
+    await this.store.write(state);
+  }
+
+  private async markTelegramLoopHealthy(): Promise<void> {
+    const state = await this.store.read();
+    state.daemon.lastTelegramUpdateAt = new Date().toISOString();
+    state.daemon.lastTelegramError = null;
+    await this.store.write(state);
+  }
+
+  private async markTelegramLoopError(errorText: string): Promise<void> {
+    const state = await this.store.read();
+    state.daemon.lastTelegramError = errorText;
     await this.store.write(state);
   }
 }
@@ -991,6 +1153,25 @@ function normalizeModelInput(modelName: string): string | null {
     return null;
   }
   return normalized;
+}
+
+function resolveWorkdir(rawPath: string, instanceCwd: string, defaultCwd: string): string {
+  const trimmed = rawPath.trim();
+  const withHome = trimmed.startsWith("~")
+    ? path.join(os.homedir(), trimmed.slice(1))
+    : trimmed;
+  if (path.isAbsolute(withHome)) {
+    return path.resolve(withHome);
+  }
+  const base = instanceCwd || defaultCwd || process.cwd();
+  return path.resolve(base, withHome);
+}
+
+async function assertDirectory(cwd: string): Promise<void> {
+  const info = await stat(cwd);
+  if (!info.isDirectory()) {
+    throw new Error(`不是目录：${cwd}`);
+  }
 }
 
 async function assertPortAvailable(host: string, port: number): Promise<void> {

@@ -39,16 +39,21 @@ const stateSchema = z.object({
     claude: z.string().optional()
   }).default({}),
   pendingAuthRequests: z.array(z.any()).default([]),
+  knownTelegramUsers: z.array(z.any()).default([]),
   instances: z.array(z.any()).default([]),
   tasks: z.array(z.any()).default([]),
   daemon: z.object({
     pid: z.number().int().nullable().default(null),
     startedAt: z.string().nullable().default(null),
-    lastHeartbeatAt: z.string().nullable().default(null)
+    lastHeartbeatAt: z.string().nullable().default(null),
+    lastTelegramUpdateAt: z.string().nullable().default(null),
+    lastTelegramError: z.string().nullable().default(null)
   }).default({
     pid: null,
     startedAt: null,
-    lastHeartbeatAt: null
+    lastHeartbeatAt: null,
+    lastTelegramUpdateAt: null,
+    lastTelegramError: null
   })
 });
 
@@ -107,12 +112,15 @@ export function createDefaultState(): PersistedState {
     currentInstanceId: null,
     currentInstanceByRuntime: {},
     pendingAuthRequests: [],
+    knownTelegramUsers: [],
     instances: [],
     tasks: [],
     daemon: {
       pid: null,
       startedAt: null,
-      lastHeartbeatAt: null
+      lastHeartbeatAt: null,
+      lastTelegramUpdateAt: null,
+      lastTelegramError: null
     }
   };
 }
@@ -149,6 +157,7 @@ export async function loadState(paths = getAppPaths()): Promise<PersistedState> 
       currentInstanceId: parsed.currentInstanceId,
       currentInstanceByRuntime: parsed.currentInstanceByRuntime,
       pendingAuthRequests: parsed.pendingAuthRequests as PersistedState["pendingAuthRequests"],
+      knownTelegramUsers: parsed.knownTelegramUsers as PersistedState["knownTelegramUsers"],
       instances: parsed.instances as PersistedState["instances"],
       tasks: parsed.tasks as PersistedState["tasks"],
       daemon: parsed.daemon as PersistedState["daemon"]

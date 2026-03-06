@@ -186,6 +186,7 @@ daemon 运行后，可以在 Telegram 私聊里发送：
 /start_codex
 /start_claude
 /use <instanceId>
+/cwd [path]
 /args [codex|claude]
 /setargs <runtime> <args...>
 /clearargs <runtime>
@@ -203,6 +204,7 @@ daemon 运行后，可以在 Telegram 私聊里发送：
 
 - `/start_codex` 和 `/start_claude`：创建新的逻辑实例
 - `/use <instanceId>`：切换当前选中实例
+- `/cwd`：查看当前实例工作目录；`/cwd <path>` 可切换到新目录
 - 已选中实例后，也可以直接发送普通文本，不必一定使用 `/ask`
 - `/model [runtime] <model>`：设置模型；省略 runtime 时默认作用于当前实例 runtime
 - `/model default`：清除 `--model` 参数，回到 CLI 默认模型
@@ -223,8 +225,10 @@ http://127.0.0.1:4567
 当前会显示：
 
 - daemon PID
+- Telegram 最近连接时间与错误状态
 - 实例总数
 - 任务总数
+- 已授权 Telegram 用户列表（含连接状态）
 - 待授权 Telegram 请求
 - 受管实例表
 - 最近一次任务输出预览
@@ -249,7 +253,9 @@ daemon 会暴露一个仅本机使用的 HTTP API，CLI 在 `serve` 已运行时
 
 - `GET /api/status`
 - `GET /api/auth/pending`
+- `GET /api/auth/allowed`
 - `POST /api/auth/approve/:userId`
+- `POST /api/auth/revoke/:userId`
 - `GET /api/instances`
 - `POST /api/instances`
 - `POST /api/instances/:instanceId/use`

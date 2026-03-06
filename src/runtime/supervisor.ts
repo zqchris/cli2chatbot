@@ -234,6 +234,18 @@ export class InstanceSupervisor {
     return instance;
   }
 
+  async setInstanceCwd(instanceId: string, cwd: string): Promise<InstanceRecord> {
+    const state = await this.store.read();
+    const instance = state.instances.find((candidate) => candidate.instanceId === instanceId);
+    if (!instance) {
+      throw new Error(`Unknown instance: ${instanceId}`);
+    }
+    instance.cwd = cwd;
+    instance.lastActiveAt = new Date().toISOString();
+    await this.store.write(state);
+    return instance;
+  }
+
   async kill(instanceId: string): Promise<void> {
     const state = await this.store.read();
     const instance = state.instances.find((candidate) => candidate.instanceId === instanceId);
