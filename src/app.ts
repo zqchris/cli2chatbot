@@ -970,11 +970,60 @@ function loadingFrame(index: number): string {
   return frames[index % frames.length] ?? "⏳";
 }
 
-function formatTelegramDisplayChunk(event: StreamEvent): string | null {
-  // Default UX: keep Telegram draft as progress-only preview.
-  // Final answer is delivered on task exit after structured cleanup.
-  void event;
+export function formatTelegramDisplayChunk(event: StreamEvent): string | null {
+  if (event.type === "partial_text") {
+    return sanitizePartialDisplayChunk(event.text);
+  }
+  if (event.type === "tool_event") {
+    const text = sanitizeDisplayText(event.text, true);
+    return text ? `\n🔧 工具输出\n${text}\n` : null;
+  }
+  if (event.type === "status") {
+    const text = sanitizeDisplayText(event.text, false);
+    return text ? `\n[状态] ${text}\n` : null;
+  }
+  if (event.type === "error") {
+    const text = sanitizeFinalTelegramText(event.text) ?? sanitizeDisplayText(event.text, false);
+    return text ? `\n[错误] ${text}\n` : null;
+  }
+  if (event.type === "final_text") {
+    return sanitizeFinalTelegramText(event.text) ?? sanitizeDisplayText(event.text, false);
+  }
   return null;
+}
+
+function sanitizePartialDisplayChunk(input: string): string | null {
+  if (input.length === 0) {
+    return null;
+  }
+  const text = input.replace(/\r\n/g, "\n");
+  const lower = text.toLowerCase();
+  if (
+    lower.includes('"type":"user"') ||
+    lower.includes('"type":"tool_result"') ||
+    lower.includes('"type":"stream_event"') ||
+    lower.includes('"type":"system"')
+  ) {
+    return null;
+  }
+
+  const lines = text
+    .split(/\r?\n/)
+    .filter((line) => !isTransportMetaLine(line))
+    .filter((line) => !line.toLowerCase().includes("tool loaded."))
+    .filter((line) => !line.includes("/node_modules/"))
+    .filter((line) => !line.endsWith(".cjs"))
+    .filter((line) => !line.endsWith(".LICENSE"));
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  const joined = lines.join("\n");
+  if (!joined.trim()) {
+    return joined;
+  }
+  return joined;
 }
 
 function sanitizeDisplayText(input: string, fromTool: boolean): string | null {
@@ -988,8 +1037,7 @@ function sanitizeDisplayText(input: string, fromTool: boolean): string | null {
     lower.includes('"type":"user"') ||
     lower.includes('"type":"tool_result"') ||
     lower.includes('"type":"stream_event"') ||
-    lower.includes('"type":"system"') ||
-    lower.includes("tool loaded.")
+    lower.includes('"type":"system"')
   ) {
     return null;
   }
@@ -997,6 +1045,7 @@ function sanitizeDisplayText(input: string, fromTool: boolean): string | null {
   const lines = text
     .split(/\r?\n/)
     .filter((line) => !isTransportMetaLine(line))
+    .filter((line) => !line.toLowerCase().includes("tool loaded."))
     .filter((line) => !line.includes("/node_modules/"))
     .filter((line) => !line.endsWith(".cjs"))
     .filter((line) => !line.endsWith(".LICENSE"));
@@ -1100,7 +1149,7 @@ function isTransportMetaLine(line: string): boolean {
   );
 }
 
-function mergeDraftText(current: string, chunk: string, eventType: StreamEvent["type"]): string {
+export function mergeDraftText(current: string, chunk: string, eventType: StreamEvent["type"]): string {
   if (!chunk) {
     return current;
   }
