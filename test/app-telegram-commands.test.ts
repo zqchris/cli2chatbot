@@ -90,11 +90,13 @@ describe("telegram command handling", () => {
     const chatId = userId;
     const app = await createIsolatedApp(userId);
     const sentTexts: string[] = [];
+    const sentOptions: Array<Record<string, unknown> | undefined> = [];
     const editedTexts: string[] = [];
     const askCalls: Array<{ instanceId: string; prompt: string }> = [];
     app.telegram = {
-      sendMessage: async (_chatId: string, text: string) => {
+      sendMessage: async (_chatId: string, text: string, options?: Record<string, unknown>) => {
         sentTexts.push(text);
+        sentOptions.push(options);
         return { message_id: 1 };
       },
       editMessageText: async (_chatId: string, _messageId: number, text: string) => {
@@ -131,6 +133,7 @@ describe("telegram command handling", () => {
     expect(askCalls[0]?.instanceId).toBe("inst-codex-1");
     expect(askCalls[0]?.prompt).toBe("帮我看看当前仓库结构");
     expect(sentTexts[0]).toContain("已接收任务，正在发送到 codex:inst-codex-1");
+    expect(sentOptions[0]).toMatchObject({ replyToMessageId: 2 });
     expect(editedTexts.at(-1)).toContain("自动路由成功");
   });
 

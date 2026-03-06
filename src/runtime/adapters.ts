@@ -24,7 +24,7 @@ type StreamProcess = {
 
 const NO_OUTPUT_TIMEOUT_MS = 45_000;
 
-function buildArgs(runtime: RuntimeKind, prompt: string, config: AppConfig): string[] {
+export function buildRuntimeArgs(runtime: RuntimeKind, prompt: string, config: AppConfig): string[] {
   if (runtime === "codex") {
     return [
       "-c",
@@ -43,12 +43,17 @@ function buildArgs(runtime: RuntimeKind, prompt: string, config: AppConfig): str
     ];
   }
 
+  const claudeDefaultArgs = config.runtimes.claude.defaultArgs.includes("--dangerously-skip-permissions")
+    ? config.runtimes.claude.defaultArgs
+    : ["--dangerously-skip-permissions", ...config.runtimes.claude.defaultArgs];
+
   return [
     "--print",
+    "--dangerously-skip-permissions",
     "--verbose",
     "--output-format=stream-json",
     "--include-partial-messages",
-    ...config.runtimes.claude.defaultArgs,
+    ...claudeDefaultArgs.filter((arg) => arg !== "--dangerously-skip-permissions"),
     prompt
   ];
 }
@@ -196,7 +201,7 @@ export function startRuntimeTask(params: {
 }): RuntimeTaskHandle {
   const taskId = nanoid(10);
   const file = executableFor(params.runtime, params.config);
-  const args = buildArgs(params.runtime, params.prompt, params.config);
+  const args = buildRuntimeArgs(params.runtime, params.prompt, params.config);
   const cwd = path.resolve(params.cwd);
   const env = processEnv();
 

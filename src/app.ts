@@ -23,6 +23,7 @@ import { createDraftStreamLoop } from "./telegram/draft-loop.js";
 type TelegramContext = {
   chatId: string;
   userId: string;
+  messageId: number | null;
 };
 
 type PendingAuthPayload = {
@@ -305,6 +306,7 @@ export class BridgeApp {
     const chatType = typeof chat.type === "string" ? chat.type : "";
     const chatId = chat.id == null ? "" : String(chat.id);
     const userId = from.id == null ? "" : String(from.id);
+    const messageId = typeof message.message_id === "number" ? message.message_id : null;
     await this.upsertKnownUser({
       chatId,
       userId,
@@ -333,7 +335,7 @@ export class BridgeApp {
     }
 
     try {
-      await this.handleTelegramCommand({ chatId, userId }, text);
+      await this.handleTelegramCommand({ chatId, userId, messageId }, text);
     } catch (error) {
       await this.telegram.sendMessage(chatId, `命令执行失败：${String(error)}`);
     }
@@ -682,7 +684,11 @@ export class BridgeApp {
       await this.telegram.sendMessage(ctx.chatId, "没有当前实例，请先 /start_codex 或 /start_claude。");
       return;
     }
-    const ack = await this.telegram.sendMessage(ctx.chatId, `已接收任务，正在发送到 ${instance.runtime}:${instance.instanceId} ...`);
+    const ack = await this.telegram.sendMessage(
+      ctx.chatId,
+      `已接收任务，正在发送到 ${instance.runtime}:${instance.instanceId} ...`,
+      ctx.messageId ? { replyToMessageId: ctx.messageId } : undefined
+    );
     let stopped = false;
     let draftText = "";
     let finalText = "";

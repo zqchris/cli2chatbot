@@ -7,6 +7,7 @@ type TelegramApiResult<T> = {
 export type TelegramTextOptions = {
   parseMode?: "HTML";
   replyMarkup?: Record<string, unknown>;
+  replyToMessageId?: number;
 };
 
 export type TelegramBotCommand = {
@@ -48,6 +49,13 @@ export class TelegramApi {
       text,
       ...(options?.parseMode ? { parse_mode: options.parseMode } : {}),
       ...(options?.replyMarkup ? { reply_markup: options.replyMarkup } : {}),
+      ...(options?.replyToMessageId
+        ? {
+            reply_parameters: {
+              message_id: options.replyToMessageId
+            }
+          }
+        : {}),
       disable_web_page_preview: true
     });
   }
