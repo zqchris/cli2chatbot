@@ -429,12 +429,56 @@ function formatTelegramDisplayChunk(event: StreamEvent): string | null {
     return null;
   }
   if (event.type === "tool_event") {
-    return event.text.trim() || null;
+    return sanitizeDisplayText(event.text, true);
   }
   if (event.type === "partial_text" || event.type === "final_text" || event.type === "error") {
-    return event.text.trim() || null;
+    return sanitizeDisplayText(event.text, false);
   }
   return null;
+}
+
+function sanitizeDisplayText(input: string, fromTool: boolean): string | null {
+  const text = input.trim();
+  if (!text) {
+    return null;
+  }
+
+  const lower = text.toLowerCase();
+  if (
+    lower.includes('"type":"user"') ||
+    lower.includes('"type":"tool_result"') ||
+    lower.includes('"type":"stream_event"') ||
+    lower.includes('"type":"system"') ||
+    lower.includes("tool loaded.")
+  ) {
+    return null;
+  }
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter((line) => !line.includes("/node_modules/"))
+    .filter((line) => !line.endsWith(".cjs"))
+    .filter((line) => !line.endsWith(".LICENSE"));
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  // Tool output can be very verbose; keep the first N lines only.
+  const maxLines = fromTool ? 16 : 24;
+  const clipped = lines.slice(0, maxLines);
+  const omitted = lines.length - clipped.length;
+  let merged = clipped.join("\n");
+  if (omitted > 0) {
+    merged = `${merged}\n... (省略 ${omitted} 行)`;
+  }
+
+  if (merged.length > 1200) {
+    merged = `${merged.slice(0, 1100)}\n... (输出过长，已截断)`;
+  }
+  return merged.trim() || null;
 }
 
 async function assertPortAvailable(host: string, port: number): Promise<void> {
