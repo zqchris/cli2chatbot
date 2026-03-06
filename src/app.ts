@@ -492,7 +492,7 @@ function sanitizeFinalTelegramText(input: string): string | null {
   if (!base) {
     return null;
   }
-  const filtered = extractLikelyAnswerSegment(stripTracePrefixesLineByLine(stripExecutionScaffold(base)));
+  const filtered = stripTracePrefixesLineByLine(stripExecutionScaffold(base));
 
   if (!filtered) {
     return null;
@@ -570,44 +570,6 @@ function stripSingleLineTracePrefix(line: string): string {
     return "";
   }
   return text;
-}
-
-function extractLikelyAnswerSegment(input: string): string {
-  const separatorSplit = input
-    .split(/\n[-─]{8,}\n/g)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const base = separatorSplit.length > 0 ? (separatorSplit.at(-1) ?? input) : input;
-  const paragraphs = base
-    .split(/\n{2,}/g)
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  if (paragraphs.length <= 1) {
-    return base.trim();
-  }
-
-  let best = paragraphs.at(-1) ?? base.trim();
-  let bestScore = Number.NEGATIVE_INFINITY;
-  for (let i = 0; i < paragraphs.length; i += 1) {
-    const candidate = paragraphs[i] ?? "";
-    const score = scoreAnswerCandidate(candidate, i, paragraphs.length);
-    if (score >= bestScore) {
-      best = candidate;
-      bestScore = score;
-    }
-  }
-  return best.trim();
-}
-
-function scoreAnswerCandidate(candidate: string, index: number, total: number): number {
-  const lines = candidate.split(/\r?\n/);
-  const pathLines = lines.filter((line) => isAbsolutePathLikeLine(line.trim())).length;
-  const metaLines = lines.filter((line) => isTransportMetaLine(line) || isExecutionTraceLine(line.trim())).length;
-  const contentLines = lines.filter((line) => /[A-Za-z\u4e00-\u9fff]/.test(line)).length;
-  const hasSentencePunctuation = /[。！？:：]/.test(candidate) ? 1 : 0;
-  const tailBias = total > 1 ? index / total : 0;
-  return (contentLines * 2) - (pathLines * 3) - (metaLines * 4) + hasSentencePunctuation + tailBias;
 }
 
 function isTransportMetaLine(line: string): boolean {
