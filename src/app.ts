@@ -596,11 +596,7 @@ function sanitizeDisplayText(input: string, fromTool: boolean): string | null {
   }
 
   if (!fromTool) {
-    let mergedText = compactAbsolutePathFlood(lines);
-    if (mergedText.length > 1800) {
-      mergedText = `${mergedText.slice(0, 1700)}\n... (输出过长，已截断)`;
-    }
-    return mergedText;
+    return lines.join("\n").trim();
   }
 
   // Tool output can be very verbose; keep the first N lines only.
@@ -623,84 +619,54 @@ function sanitizeFinalTelegramText(input: string): string | null {
   if (!base) {
     return null;
   }
-  const filtered = stripTracePrefixesLineByLine(stripExecutionScaffold(base));
+  const filtered = collapseBlankLines(
+    base
+      .split(/\r?\n/)
+      .filter((line) => !isLikelyTraceLine(line.trim()))
+      .join("\n")
+  );
 
   if (!filtered) {
     return null;
   }
-  const compacted = compactAbsolutePathFlood(filtered.split(/\r?\n/));
-  return truncateLongCodeBlocks(compacted, 700);
+  return filtered;
 }
 
-function truncateLongCodeBlocks(input: string, maxBlockChars: number): string {
-  return input.replace(/```([\s\S]*?)```/g, (_all, body: string) => {
-    if (body.length <= maxBlockChars) {
-      return `\`\`\`${body}\`\`\``;
-    }
-    return `\`\`\`${body.slice(0, maxBlockChars)}\n... (代码块过长，已截断)\n\`\`\``;
-  });
-}
-
-function stripExecutionScaffold(input: string): string {
-  const output: string[] = [];
-  let previousBlank = false;
-  for (const line of input.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (trimmed && isExecutionTraceLine(trimmed)) {
-      continue;
-    }
-    if (!trimmed) {
-      if (previousBlank) {
-        continue;
-      }
-      previousBlank = true;
-      output.push("");
-      continue;
-    }
-    previousBlank = false;
-    output.push(line);
+function isLikelyTraceLine(trimmed: string): boolean {
+  if (!trimmed) {
+    return false;
   }
-  return output.join("\n").trim();
-}
-
-function isExecutionTraceLine(trimmed: string): boolean {
   const lower = trimmed.toLowerCase();
   return (
     /^(\d+\s*→)/.test(trimmed) ||
     /^[-─]{6,}$/.test(trimmed) ||
     /^↳/.test(trimmed) ||
     /^\(no output\)$/i.test(trimmed) ||
-    /^([•●◦▪▫🟢🟡🔵⚪⭕]\s*)?(bash|ran|running|explored|read|search|list|apply_patch|command|tool loaded)\b/i.test(trimmed) ||
-    /^[└├│]/.test(trimmed) ||
+    /^([•●◦▪▫🟢🟡🔵⚪⭕]\s*)?(bash\(|ran\b|explored\b|read\b|search\b|list\b)/i.test(trimmed) ||
+    /^([└├│]\s*)(read|list|search|ran)\b/i.test(trimmed) ||
+    lower === "tool loaded." ||
     lower.includes("终端兼容模式已启用，正在继续执行任务")
   );
 }
 
-function stripTracePrefixesLineByLine(input: string): string {
-  const result: string[] = [];
-  for (const rawLine of input.split(/\r?\n/)) {
-    const line = stripSingleLineTracePrefix(rawLine);
-    if (!line.trim() && rawLine.trim()) {
+function collapseBlankLines(input: string): string {
+  const lines = input.split(/\r?\n/);
+  const out: string[] = [];
+  let previousBlank = false;
+  for (const line of lines) {
+    const blank = line.trim().length === 0;
+    if (blank) {
+      if (previousBlank) {
+        continue;
+      }
+      previousBlank = true;
+      out.push("");
       continue;
     }
-    result.push(line);
+    previousBlank = false;
+    out.push(line);
   }
-  return result.join("\n").trim();
-}
-
-function stripSingleLineTracePrefix(line: string): string {
-  const text = line
-    .replace(/^\s*\d+\s*→\s*/, "")
-    .replace(/^\s*[•●◦▪▫🟢🟡🔵⚪⭕]\s*/, "")
-    .replace(/^\s*(bash|ran|running|explored|read|search|list)\([^)]*\)\s*/i, "")
-    .replace(/^\s*(ran|explored|read|search|list)\s+/i, "")
-    .replace(/^\s*[└├│]\s*/, "")
-    .replace(/^\s*↳\s*/, "");
-
-  if (/^\s*(\(no output\)|no output)\s*$/i.test(text)) {
-    return "";
-  }
-  return text;
+  return out.join("\n").trim();
 }
 
 function isTransportMetaLine(line: string): boolean {
@@ -722,52 +688,6 @@ function isTransportMetaLine(line: string): boolean {
     lower === "}}" ||
     lower.startsWith("{\"type\":\"user\"")
   );
-}
-
-function compactAbsolutePathFlood(lines: string[]): string {
-  const pathLikeIndexes: number[] = [];
-  for (let i = 0; i < lines.length; i += 1) {
-    const candidate = lines[i]?.trim() ?? "";
-    if (!candidate) {
-      continue;
-    }
-    if (isAbsolutePathLikeLine(candidate)) {
-      pathLikeIndexes.push(i);
-    }
-  }
-
-  if (pathLikeIndexes.length < 6 || pathLikeIndexes.length < Math.ceil(lines.length * 0.55)) {
-    return lines.join("\n").trim();
-  }
-
-  const preview: string[] = [];
-  let picked = 0;
-  for (const line of lines) {
-    if (isAbsolutePathLikeLine(line.trim())) {
-      if (picked < 4) {
-        preview.push(line);
-      }
-      picked += 1;
-      continue;
-    }
-    preview.push(line);
-  }
-  const omitted = pathLikeIndexes.length - Math.min(pathLikeIndexes.length, 4);
-  preview.push(`... (路径输出过长，已省略 ${omitted} 行)`);
-  return preview.join("\n").trim();
-}
-
-function isAbsolutePathLikeLine(line: string): boolean {
-  if (!line) {
-    return false;
-  }
-  if (line.startsWith("/Users/") || line.startsWith("/home/") || line.startsWith("/tmp/")) {
-    return true;
-  }
-  if (line.includes("/cli2chatbot/")) {
-    return true;
-  }
-  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+/.test(line) && line.includes(".ts");
 }
 
 function mergeDraftText(current: string, chunk: string, eventType: StreamEvent["type"]): string {
