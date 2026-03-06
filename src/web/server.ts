@@ -4,8 +4,8 @@ import type { BridgeApp } from "../app.js";
 export async function createWebServer(app: BridgeApp) {
   const server = Fastify({ logger: false });
 
-  server.get("/", async () => {
-    return `<!doctype html>
+  server.get("/", async (_request, reply) => {
+    return reply.type("text/html; charset=utf-8").send(`<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
@@ -64,10 +64,11 @@ export async function createWebServer(app: BridgeApp) {
     </main>
     <script>
       async function postJson(url, body) {
+        const hasBody = body !== undefined;
         const res = await fetch(url, {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: body ? JSON.stringify(body) : undefined
+          headers: hasBody ? { 'content-type': 'application/json' } : undefined,
+          body: hasBody ? JSON.stringify(body) : undefined
         });
         return res.json();
       }
@@ -184,7 +185,7 @@ export async function createWebServer(app: BridgeApp) {
       setInterval(load, 5000);
     </script>
   </body>
-</html>`;
+</html>`);
   });
 
   server.get("/api/status", async () => app.commandStatus());
