@@ -25,9 +25,11 @@ describe("normalizeRuntimeChunk", () => {
     const events = normalizeRuntimeChunk(
       "claude",
       "task1",
-      '{"delta":"hello"}\n{"type":"status","text":"thinking"}\n{"type":"error","message":"bad"}\n'
+      '{"type":"system","subtype":"init"}\n{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}}\n{"type":"result","subtype":"success","result":"done"}\n'
     );
-    expect(events.map((event) => event.type)).toEqual(["partial_text", "status", "error"]);
+    expect(events.map((event) => event.type)).toEqual(["partial_text", "final_text"]);
+    expect(events[0]?.type === "partial_text" ? events[0].text : "").toBe("hello");
+    expect(events[1]?.type === "final_text" ? events[1].text : "").toBe("done");
   });
 
   it("falls back to partial_text for plain lines", () => {
@@ -66,5 +68,19 @@ describe("normalizeRuntimeChunk", () => {
     expect(events).toHaveLength(1);
     expect(events[0]?.type).toBe("final_text");
     expect(events[0]?.type === "final_text" ? events[0].text : "").toBe("真正结果");
+  });
+
+  it("keeps only command output for codex command_execution events", () => {
+    const events = normalizeRuntimeChunk(
+      "codex",
+      "task1",
+      [
+        '{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"pwd","aggregated_output":"","status":"in_progress"}}',
+        '{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"pwd","aggregated_output":"/Users/zkyo\\n","status":"completed"}}'
+      ].join("\n")
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe("tool_event");
+    expect(events[0]?.type === "tool_event" ? events[0].text : "").toBe("/Users/zkyo");
   });
 });

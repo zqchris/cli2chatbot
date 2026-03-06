@@ -5,6 +5,7 @@ import { createDefaultConfig, ensureAppDir, getAppPaths, loadConfig, saveConfig 
 import { BridgeApp } from "./app.js";
 import { controlClient, daemonAvailable } from "./control-client.js";
 import { acquireDaemonLock } from "./daemon-lock.js";
+import { runSmoke } from "./smoke.js";
 import { createWebServer } from "./web/server.js";
 
 const program = new Command();
@@ -158,6 +159,27 @@ program
   .action(async () => {
     const app = new BridgeApp(await loadConfig());
     output.write(`${JSON.stringify(await app.doctor(), null, 2)}\n`);
+  });
+
+program
+  .command("smoke")
+  .description("Run local simulated Telegram roundtrip smoke test for runtime communication.")
+  .option("--runtime <runtime>", "codex | claude | both", "both")
+  .option("--timeout-ms <ms>", "per-runtime timeout in milliseconds", "70000")
+  .action(async (options) => {
+    const runtimeOption = String(options.runtime ?? "both");
+    const timeoutMs = Number(options.timeoutMs ?? "70000");
+    const runtimes: Array<"codex" | "claude"> =
+      runtimeOption === "codex" ? ["codex"] : runtimeOption === "claude" ? ["claude"] : ["codex", "claude"];
+    const results = [];
+    for (const runtime of runtimes) {
+      const result = await runSmoke(runtime, timeoutMs);
+      results.push(result);
+    }
+    output.write(`${JSON.stringify({ ok: results.every((item) => item.ok), results }, null, 2)}\n`);
+    if (!results.every((item) => item.ok)) {
+      process.exitCode = 1;
+    }
   });
 
 await program.parseAsync(process.argv);

@@ -22,13 +22,30 @@ type StreamProcess = {
   kill: (signal?: NodeJS.Signals | number) => boolean;
 };
 
+const NO_OUTPUT_TIMEOUT_MS = 45_000;
+
 function buildArgs(runtime: RuntimeKind, prompt: string, config: AppConfig): string[] {
   if (runtime === "codex") {
-    return ["exec", "--skip-git-repo-check", "--json", prompt, ...config.runtimes.codex.defaultArgs];
+    return [
+      "-c",
+      "approval_policy=\"never\"",
+      "-c",
+      "sandbox_mode=\"danger-full-access\"",
+      "-c",
+      "suppress_unstable_features_warning=true",
+      "-c",
+      "features.shell_snapshot=false",
+      "exec",
+      "--skip-git-repo-check",
+      "--json",
+      prompt,
+      ...config.runtimes.codex.defaultArgs
+    ];
   }
 
   return [
     "--print",
+    "--verbose",
     "--output-format=stream-json",
     "--include-partial-messages",
     prompt,
@@ -84,6 +101,8 @@ async function* processEvents(runtime: RuntimeKind, taskId: string, child: Strea
   const queue: StreamEvent[] = [{ type: "task_started", taskId, timestamp: new Date().toISOString() }];
   let resolver: (() => void) | null = null;
   let done = false;
+  let lastOutputAt = Date.now();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
 
   const wake = () => {
     if (resolver) {
@@ -92,10 +111,31 @@ async function* processEvents(runtime: RuntimeKind, taskId: string, child: Strea
     }
   };
 
+  const armTimeout = () => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    timeout = setTimeout(() => {
+      queue.push({
+        type: "error",
+        taskId,
+        text: `兼容模式下等待输出超时（${Math.floor(NO_OUTPUT_TIMEOUT_MS / 1000)} 秒），已自动中止本次任务。`,
+        timestamp: new Date().toISOString()
+      });
+      done = true;
+      child.kill("SIGKILL");
+      wake();
+    }, Math.max(0, NO_OUTPUT_TIMEOUT_MS - (Date.now() - lastOutputAt)));
+  };
+
   const pushChunk = (chunk: string) => {
+    lastOutputAt = Date.now();
+    armTimeout();
     queue.push(...normalizeRuntimeChunk(runtime, taskId, chunk));
     wake();
   };
+
+  armTimeout();
 
   child.stdout.on("data", (chunk: Buffer | string) => {
     pushChunk(String(chunk));
@@ -116,6 +156,10 @@ async function* processEvents(runtime: RuntimeKind, taskId: string, child: Strea
   });
 
   child.on("close", (code, signal) => {
+    if (timeout) {
+      clearTimeout(timeout);
+      timeout = undefined;
+    }
     queue.push({
       type: "exit",
       taskId,

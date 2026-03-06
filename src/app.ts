@@ -280,48 +280,59 @@ export class BridgeApp {
       }
       const ack = await this.telegram.sendMessage(ctx.chatId, `已接收任务，正在发送到 ${instance.runtime}:${instance.instanceId} ...`);
       let stopped = false;
-      let buffer = "";
+      let draftText = "";
+      let finalText = "";
+      let spinnerIndex = 0;
       const draft = createDraftStreamLoop({
         throttleMs: 1200,
         isStopped: () => stopped,
         sendOrEditStreamMessage: async (nextText) => {
-          try {
-            await this.telegram.editMessageText(ctx.chatId, ack.message_id, truncateForTelegram(nextText));
-            return true;
-          } catch {
-            const fallback = await this.telegram.sendMessage(ctx.chatId, truncateForTelegram(nextText));
-            ack.message_id = fallback.message_id;
-            return true;
-          }
+          await this.telegram.editMessageText(ctx.chatId, ack.message_id, truncateForTelegram(nextText, 3500));
+          return true;
         }
       });
 
       const ticker = setInterval(() => {
         void this.telegram.sendTyping(ctx.chatId).catch(() => undefined);
+        if (!draftText) {
+          spinnerIndex += 1;
+          const elapsed = spinnerIndex * 4;
+          const frame = loadingFrame(spinnerIndex);
+          void this.telegram.editMessageText(
+            ctx.chatId,
+            ack.message_id,
+            `已接收任务，正在发送到 ${instance.runtime}:${instance.instanceId} ... ${frame} ${elapsed}s`
+          ).catch(() => undefined);
+        }
       }, 4000);
 
       const task = await this.supervisor.ask(instance.instanceId, prompt, async (event) => {
         await this.handleTelegramTaskEvent(ctx.chatId, ack.message_id, instance.instanceId, event);
-        if (
-          event.type === "partial_text" ||
-          event.type === "tool_event" ||
-          event.type === "status" ||
-          event.type === "final_text" ||
-          event.type === "error"
-        ) {
-          buffer = `${buffer}\n${event.text}`.trim();
-          draft.update(buffer);
+        const displayChunk = formatTelegramDisplayChunk(event);
+        if (displayChunk) {
+          draftText = [draftText, displayChunk].filter(Boolean).join("\n\n").trim();
+          draft.update(draftText);
+        }
+        if (event.type === "final_text" && event.text.trim()) {
+          finalText = event.text.trim();
+        }
+        if (event.type === "error" && event.text.trim()) {
+          finalText = event.text.trim();
         }
         if (event.type === "exit") {
           stopped = true;
           clearInterval(ticker);
           await draft.flush();
-          const finalText = truncateForTelegram(`${buffer}\n\n[${event.code === 0 ? "success" : "failed"}] task=${event.taskId}`);
-          try {
-            await this.telegram.editMessageText(ctx.chatId, ack.message_id, finalText);
-          } catch {
-            await this.telegram.sendMessage(ctx.chatId, finalText);
-          }
+          const terminalText = event.code === 0
+            ? (finalText || draftText || `[success] task=${event.taskId}`)
+            : `${finalText || draftText || "任务失败。"}\n\n[failed] task=${event.taskId}`;
+          await this.telegram.editMessageText(
+            ctx.chatId,
+            ack.message_id,
+            truncateForTelegram(terminalText, 3500)
+          ).catch(async () => {
+            await this.telegram.sendMessage(ctx.chatId, truncateForTelegram(terminalText, 3500));
+          });
         }
       });
 
@@ -400,12 +411,30 @@ export class BridgeApp {
   }
 }
 
-function truncateForTelegram(text: string): string {
+function truncateForTelegram(text: string, maxLen = 3500): string {
   const normalized = text.trim() || "运行中...";
-  if (normalized.length <= 3500) {
+  if (normalized.length <= maxLen) {
     return normalized;
   }
-  return `${normalized.slice(0, 3400)}\n\n[输出过长，更多内容请用 /logs 或 /web 查看]`;
+  return `${normalized.slice(0, Math.max(0, maxLen - 100))}\n\n[输出过长，更多内容请用 /logs 或 /web 查看]`;
+}
+
+function loadingFrame(index: number): string {
+  const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  return frames[index % frames.length] ?? "⏳";
+}
+
+function formatTelegramDisplayChunk(event: StreamEvent): string | null {
+  if (event.type === "status") {
+    return null;
+  }
+  if (event.type === "tool_event") {
+    return event.text.trim() || null;
+  }
+  if (event.type === "partial_text" || event.type === "final_text" || event.type === "error") {
+    return event.text.trim() || null;
+  }
+  return null;
 }
 
 async function assertPortAvailable(host: string, port: number): Promise<void> {
