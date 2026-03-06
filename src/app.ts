@@ -430,9 +430,9 @@ function loadingFrame(index: number): string {
 }
 
 function formatTelegramDisplayChunk(event: StreamEvent): string | null {
-  if (event.type === "error") {
-    return sanitizeDisplayText(event.text, false);
-  }
+  // Default UX: keep Telegram draft as progress-only preview.
+  // Final answer is delivered on task exit after structured cleanup.
+  void event;
   return null;
 }
 
@@ -492,7 +492,7 @@ function sanitizeFinalTelegramText(input: string): string | null {
   if (!base) {
     return null;
   }
-  const filtered = stripExecutionScaffold(base);
+  const filtered = extractLikelyAnswerSegment(stripTracePrefixesLineByLine(stripExecutionScaffold(base)));
 
   if (!filtered) {
     return null;
@@ -537,11 +537,77 @@ function isExecutionTraceLine(trimmed: string): boolean {
   return (
     /^(\d+\s*→)/.test(trimmed) ||
     /^[-─]{6,}$/.test(trimmed) ||
+    /^↳/.test(trimmed) ||
     /^\(no output\)$/i.test(trimmed) ||
-    /^([•●]\s*)?(bash|ran|running|explored|read|search|list|apply_patch|command|tool loaded)\b/i.test(trimmed) ||
+    /^([•●◦▪▫🟢🟡🔵⚪⭕]\s*)?(bash|ran|running|explored|read|search|list|apply_patch|command|tool loaded)\b/i.test(trimmed) ||
     /^[└├│]/.test(trimmed) ||
     lower.includes("终端兼容模式已启用，正在继续执行任务")
   );
+}
+
+function stripTracePrefixesLineByLine(input: string): string {
+  const result: string[] = [];
+  for (const rawLine of input.split(/\r?\n/)) {
+    const line = stripSingleLineTracePrefix(rawLine);
+    if (!line.trim() && rawLine.trim()) {
+      continue;
+    }
+    result.push(line);
+  }
+  return result.join("\n").trim();
+}
+
+function stripSingleLineTracePrefix(line: string): string {
+  const text = line
+    .replace(/^\s*\d+\s*→\s*/, "")
+    .replace(/^\s*[•●◦▪▫🟢🟡🔵⚪⭕]\s*/, "")
+    .replace(/^\s*(bash|ran|running|explored|read|search|list)\([^)]*\)\s*/i, "")
+    .replace(/^\s*(ran|explored|read|search|list)\s+/i, "")
+    .replace(/^\s*[└├│]\s*/, "")
+    .replace(/^\s*↳\s*/, "");
+
+  if (/^\s*(\(no output\)|no output)\s*$/i.test(text)) {
+    return "";
+  }
+  return text;
+}
+
+function extractLikelyAnswerSegment(input: string): string {
+  const separatorSplit = input
+    .split(/\n[-─]{8,}\n/g)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const base = separatorSplit.length > 0 ? (separatorSplit.at(-1) ?? input) : input;
+  const paragraphs = base
+    .split(/\n{2,}/g)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (paragraphs.length <= 1) {
+    return base.trim();
+  }
+
+  let best = paragraphs.at(-1) ?? base.trim();
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < paragraphs.length; i += 1) {
+    const candidate = paragraphs[i] ?? "";
+    const score = scoreAnswerCandidate(candidate, i, paragraphs.length);
+    if (score >= bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best.trim();
+}
+
+function scoreAnswerCandidate(candidate: string, index: number, total: number): number {
+  const lines = candidate.split(/\r?\n/);
+  const pathLines = lines.filter((line) => isAbsolutePathLikeLine(line.trim())).length;
+  const metaLines = lines.filter((line) => isTransportMetaLine(line) || isExecutionTraceLine(line.trim())).length;
+  const contentLines = lines.filter((line) => /[A-Za-z\u4e00-\u9fff]/.test(line)).length;
+  const hasSentencePunctuation = /[。！？:：]/.test(candidate) ? 1 : 0;
+  const tailBias = total > 1 ? index / total : 0;
+  return (contentLines * 2) - (pathLines * 3) - (metaLines * 4) + hasSentencePunctuation + tailBias;
 }
 
 function isTransportMetaLine(line: string): boolean {
