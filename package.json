@@ -1,0 +1,33 @@
+{
+  "name": "cli2chatbot",
+  "version": "0.1.0",
+  "description": "Bridge local Codex CLI and Claude CLI to Telegram remote control.",
+  "type": "module",
+  "bin": {
+    "cli2chatbot": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "serve": "tsx src/index.ts serve",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "fastify": "^5.2.1",
+    "node-pty": "^1.0.0",
+    "nanoid": "^5.1.5",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.8"
+  },
+  "packageManager": "pnpm@10.30.3+sha512.c961d1e0a2d8e354ecaa5166b822516668b7f44cb5bd95122d590dd81922f606f5473b6d23ec4a5be05e7fcd18e8488d47d978bbe981872f1145d06e9a740017"
+}
