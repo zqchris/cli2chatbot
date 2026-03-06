@@ -459,6 +459,7 @@ function sanitizeDisplayText(input: string, fromTool: boolean): string | null {
 
   const lines = text
     .split(/\r?\n/)
+    .filter((line) => !isTransportMetaLine(line))
     .filter((line) => !line.includes("/node_modules/"))
     .filter((line) => !line.endsWith(".cjs"))
     .filter((line) => !line.endsWith(".LICENSE"));
@@ -468,7 +469,7 @@ function sanitizeDisplayText(input: string, fromTool: boolean): string | null {
   }
 
   if (!fromTool) {
-    let mergedText = lines.join("\n");
+    let mergedText = compactAbsolutePathFlood(lines);
     if (mergedText.length > 1800) {
       mergedText = `${mergedText.slice(0, 1700)}\n... (输出过长，已截断)`;
     }
@@ -516,7 +517,8 @@ function sanitizeFinalTelegramText(input: string): string | null {
   if (!filtered) {
     return null;
   }
-  return truncateLongCodeBlocks(filtered, 700);
+  const compacted = compactAbsolutePathFlood(filtered.split(/\r?\n/));
+  return truncateLongCodeBlocks(compacted, 700);
 }
 
 function truncateLongCodeBlocks(input: string, maxBlockChars: number): string {
@@ -526,6 +528,73 @@ function truncateLongCodeBlocks(input: string, maxBlockChars: number): string {
     }
     return `\`\`\`${body.slice(0, maxBlockChars)}\n... (代码块过长，已截断)\n\`\`\``;
   });
+}
+
+function isTransportMetaLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const lower = trimmed.toLowerCase();
+  return (
+    lower.includes('"stdout":') ||
+    lower.includes('"stderr":') ||
+    lower.includes('"interrupted":') ||
+    lower.includes('"isimage":') ||
+    lower.includes('"nooutputexpected":') ||
+    lower.includes('"tool_use_id"') ||
+    lower.includes('"type":"tool_result"') ||
+    lower === "tool loaded." ||
+    lower === "}" ||
+    lower === "}}" ||
+    lower.startsWith("{\"type\":\"user\"")
+  );
+}
+
+function compactAbsolutePathFlood(lines: string[]): string {
+  const pathLikeIndexes: number[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const candidate = lines[i]?.trim() ?? "";
+    if (!candidate) {
+      continue;
+    }
+    if (isAbsolutePathLikeLine(candidate)) {
+      pathLikeIndexes.push(i);
+    }
+  }
+
+  if (pathLikeIndexes.length < 6 || pathLikeIndexes.length < Math.ceil(lines.length * 0.55)) {
+    return lines.join("\n").trim();
+  }
+
+  const preview: string[] = [];
+  let picked = 0;
+  for (const line of lines) {
+    if (isAbsolutePathLikeLine(line.trim())) {
+      if (picked < 4) {
+        preview.push(line);
+      }
+      picked += 1;
+      continue;
+    }
+    preview.push(line);
+  }
+  const omitted = pathLikeIndexes.length - Math.min(pathLikeIndexes.length, 4);
+  preview.push(`... (路径输出过长，已省略 ${omitted} 行)`);
+  return preview.join("\n").trim();
+}
+
+function isAbsolutePathLikeLine(line: string): boolean {
+  if (!line) {
+    return false;
+  }
+  if (line.startsWith("/Users/") || line.startsWith("/home/") || line.startsWith("/tmp/")) {
+    return true;
+  }
+  if (line.includes("/cli2chatbot/")) {
+    return true;
+  }
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+/.test(line) && line.includes(".ts");
 }
 
 function mergeDraftText(current: string, chunk: string, eventType: StreamEvent["type"]): string {
