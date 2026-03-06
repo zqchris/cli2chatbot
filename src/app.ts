@@ -180,7 +180,7 @@ export class BridgeApp {
 
     if (!this.config.telegram.allowedUserIds.includes(userId)) {
       this.config.telegram.allowedUserIds.push(userId);
-      await saveConfig(this.config);
+      await saveConfig(this.config, this.store.paths);
     }
 
     state.pendingAuthRequests = state.pendingAuthRequests.filter((candidate) => candidate.userId !== userId);
@@ -199,7 +199,7 @@ export class BridgeApp {
     }
 
     this.config.telegram.allowedUserIds = this.config.telegram.allowedUserIds.filter((candidate) => candidate !== userId);
-    await saveConfig(this.config);
+    await saveConfig(this.config, this.store.paths);
 
     const state = await this.store.read();
     state.pendingAuthRequests = state.pendingAuthRequests.filter((candidate) => candidate.userId !== userId);
@@ -271,8 +271,8 @@ export class BridgeApp {
       try {
         updates = await this.telegram.getUpdates(this.pollOffset);
         await this.markTelegramLoopHealthy();
-      } catch {
-        await this.markTelegramLoopError("getUpdates failed");
+      } catch (error) {
+        await this.markTelegramLoopError(`getUpdates failed: ${String(error)}`);
         await delay(1500);
         continue;
       }
@@ -352,7 +352,7 @@ export class BridgeApp {
 
   private async setRuntimeArgs(runtime: RuntimeKind, args: string[]): Promise<void> {
     this.config.runtimes[runtime].defaultArgs = args;
-    await saveConfig(this.config);
+    await saveConfig(this.config, this.store.paths);
   }
 
   private runtimeArgsText(runtime: RuntimeKind): string {

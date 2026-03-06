@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -243,5 +243,10 @@ describe("telegram command handling", () => {
     expect(revoked.ok).toBe(true);
     const after = await app.commandAuthorizedUsers();
     expect(after.data).toEqual([]);
+
+    const raw = await readFile(app.store.paths.configFile, "utf8");
+    const config = JSON.parse(raw) as { telegram?: { botToken?: string; allowedUserIds?: string[] } };
+    expect(config.telegram?.botToken).toBe("test-token");
+    expect(config.telegram?.allowedUserIds ?? []).toEqual([]);
   });
 });

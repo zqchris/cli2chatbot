@@ -23,8 +23,14 @@ async function call<T>(
 
 export async function daemonAvailable(config: AppConfig): Promise<boolean> {
   try {
-    const response = await fetch(`${baseUrl(config)}/api/status`);
-    return response.ok;
+    const response = await fetch(`${baseUrl(config)}/api/status`, {
+      signal: AbortSignal.timeout(1500)
+    });
+    if (!response.ok) {
+      return false;
+    }
+    const payload = await response.json() as CommandResult<PersistedState>;
+    return Boolean(payload?.ok && payload?.data?.daemon);
   } catch {
     return false;
   }

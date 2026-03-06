@@ -29,7 +29,13 @@ async function readPid(paths: AppPaths): Promise<number | null> {
   }
 }
 
-async function removePidFile(paths: AppPaths): Promise<void> {
+async function removePidFile(paths: AppPaths, expectedPid?: number): Promise<void> {
+  if (typeof expectedPid === "number") {
+    const current = await readPid(paths);
+    if (current !== expectedPid) {
+      return;
+    }
+  }
   try {
     await unlink(paths.daemonPidFile);
   } catch {
@@ -65,7 +71,7 @@ export async function acquireDaemonLock(paths: AppPaths): Promise<DaemonLock> {
         return;
       }
       released = true;
-      await removePidFile(paths);
+      await removePidFile(paths, process.pid);
     }
   };
 }

@@ -50,6 +50,11 @@ program
   .action(async () => {
     await ensureAppDir();
     const config = await loadConfig();
+    if (!looksLikeTelegramBotToken(config.telegram.botToken)) {
+      output.write("Invalid Telegram bot token format in config. Run `cli2chatbot init` to fix it.\n");
+      process.exitCode = 1;
+      return;
+    }
     let lock: Awaited<ReturnType<typeof acquireDaemonLock>>;
     try {
       lock = await acquireDaemonLock(getAppPaths());
@@ -93,9 +98,18 @@ program
   .description("Show daemon state snapshot.")
   .action(async () => {
     const config = await loadConfig();
-    const result = (await daemonAvailable(config))
-      ? await controlClient.status(config)
-      : await new BridgeApp(config).commandStatus();
+    let result;
+    if (await daemonAvailable(config)) {
+      result = await controlClient.status(config);
+    } else {
+      const app = new BridgeApp(config);
+      const localState = await app.store.read();
+      result = {
+        ok: false,
+        message: "daemon unavailable (web control endpoint unreachable)",
+        data: localState
+      };
+    }
     output.write(`${JSON.stringify(result, null, 2)}\n`);
   });
 
@@ -189,3 +203,8 @@ if (process.argv.length <= 2) {
 }
 
 await program.parseAsync(process.argv);
+
+function looksLikeTelegramBotToken(value: string): boolean {
+  const token = value.trim();
+  return /^\d+:[A-Za-z0-9_-]{20,}$/.test(token);
+}
