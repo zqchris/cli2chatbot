@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { Command } from "commander";
@@ -181,5 +183,9 @@ program
       process.exitCode = 1;
     }
   });
+
+if (process.argv.length <= 2) {
+  process.argv.push("serve");
+}
 
 await program.parseAsync(process.argv);

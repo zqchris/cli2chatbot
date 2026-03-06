@@ -83,15 +83,25 @@ flowchart LR
 ```bash
 pnpm install
 pnpm build
+npm link
 ```
+
+说明：
+
+- `npm link` 只需要执行一次，用来把本仓库的 `cli2chatbot` 命令注册到全局 PATH。
+- 完成后可直接在任意目录运行 `cli2chatbot`。
 
 ## 快速开始
 
 ```bash
-pnpm dev init
-pnpm dev doctor
-pnpm dev serve
+cli2chatbot init
+cli2chatbot doctor
+cli2chatbot
 ```
+
+说明：
+
+- `cli2chatbot`（不带子命令）默认等价于 `cli2chatbot serve`。
 
 `serve` 启动后：
 
@@ -172,9 +182,15 @@ daemon 运行后，可以在 Telegram 私聊里发送：
 /help
 /status
 /instances
+/current
 /start_codex
 /start_claude
 /use <instanceId>
+/args [codex|claude]
+/setargs <runtime> <args...>
+/clearargs <runtime>
+/model [runtime] <model>
+/restart
 /ask <prompt>
 /stop
 /reset
@@ -187,7 +203,9 @@ daemon 运行后，可以在 Telegram 私聊里发送：
 
 - `/start_codex` 和 `/start_claude`：创建新的逻辑实例
 - `/use <instanceId>`：切换当前选中实例
-- `/ask <prompt>`：把任务发给当前实例
+- 已选中实例后，也可以直接发送普通文本，不必一定使用 `/ask`
+- `/model [runtime] <model>`：设置模型；省略 runtime 时默认作用于当前实例 runtime
+- `/model default`：清除 `--model` 参数，回到 CLI 默认模型
 - 流式输出通过反复编辑同一条 Telegram 消息来展示
 - `/logs`：返回当前实例保存的转录快照
 - `/web`：返回本地面板地址
