@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { createDefaultConfig, ensureAppDir, getAppPaths, loadConfig, saveConfig } from "./config.js";
 import { BridgeApp } from "./app.js";
 import { controlClient, daemonAvailable } from "./control-client.js";
+import { acquireDaemonLock } from "./daemon-lock.js";
 import { createWebServer } from "./web/server.js";
 
 const program = new Command();
@@ -44,14 +45,44 @@ program
   .command("serve")
   .description("Run the Telegram bridge daemon.")
   .action(async () => {
+    await ensureAppDir();
     const config = await loadConfig();
+    let lock: Awaited<ReturnType<typeof acquireDaemonLock>>;
+    try {
+      lock = await acquireDaemonLock(getAppPaths());
+    } catch (error) {
+      output.write(`${String(error)}\n`);
+      process.exitCode = 1;
+      return;
+    }
     const app = new BridgeApp(config);
     const web = await createWebServer(app);
+
+    const shutdown = async () => {
+      await lock.release();
+      await web.close().catch(() => undefined);
+    };
+
+    process.on("SIGINT", () => {
+      void shutdown().finally(() => process.exit(0));
+    });
+    process.on("SIGTERM", () => {
+      void shutdown().finally(() => process.exit(0));
+    });
+    process.on("uncaughtException", (error) => {
+      output.write(`Fatal daemon error: ${String(error)}\n`);
+      void shutdown().finally(() => process.exit(1));
+    });
+
     if (config.web.enabled) {
       await web.listen({ host: config.web.host, port: config.web.port });
       output.write(`Web panel on http://${config.web.host}:${config.web.port}\n`);
     }
-    await app.runTelegramLoop();
+    try {
+      await app.runTelegramLoop();
+    } finally {
+      await shutdown();
+    }
   });
 
 program

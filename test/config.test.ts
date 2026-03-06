@@ -18,7 +18,8 @@ describe("config", () => {
       rootDir: dir,
       configFile: path.join(dir, "config.json"),
       stateFile: path.join(dir, "state.json"),
-      logFile: path.join(dir, "events.log")
+      logFile: path.join(dir, "events.log"),
+      daemonPidFile: path.join(dir, "daemon.pid")
     };
     const config = createDefaultConfig({
       telegram: { botToken: "token", allowedUserIds: ["1"], pollingMode: "long-polling" }

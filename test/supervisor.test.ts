@@ -20,7 +20,8 @@ describe("instance supervisor", () => {
       rootDir: dir,
       configFile: path.join(dir, "config.json"),
       stateFile: path.join(dir, "state.json"),
-      logFile: path.join(dir, "events.log")
+      logFile: path.join(dir, "events.log"),
+      daemonPidFile: path.join(dir, "daemon.pid")
     });
     const supervisor = new InstanceSupervisor(
       store,

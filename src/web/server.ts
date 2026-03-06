@@ -29,6 +29,13 @@ export async function createWebServer(app: BridgeApp) {
       th { color: var(--muted); font-weight: 600; }
       .log { white-space: pre-wrap; font-family: "IBM Plex Mono", monospace; font-size: 12px; max-height: 280px; overflow: auto; background: #171717; color: #f5f5f5; border-radius: 16px; padding: 16px; margin-top: 20px; }
       .section-title { margin-top: 28px; margin-bottom: 10px; font-size: 14px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+      .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+      .btn { border: 0; border-radius: 10px; padding: 7px 12px; cursor: pointer; font-size: 12px; font-weight: 600; background: #0f766e; color: #fff; }
+      .btn.secondary { background: #44403c; }
+      .btn.danger { background: #b91c1c; }
+      .btn.small { padding: 5px 8px; font-size: 11px; }
+      .ops { display: flex; gap: 6px; flex-wrap: wrap; }
+      .notice { margin-top: 8px; color: #0f766e; font-size: 12px; min-height: 18px; }
       @media (max-width: 760px) { .intro { grid-template-columns: 1fr; } }
     </style>
   </head>
@@ -52,9 +59,74 @@ export async function createWebServer(app: BridgeApp) {
 /kill
 /logs</div>
       </div>
+      <div id="notice" class="notice"></div>
       <div id="app">Loading...</div>
     </main>
     <script>
+      async function postJson(url, body) {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: body ? JSON.stringify(body) : undefined
+        });
+        return res.json();
+      }
+
+      function showNotice(text, isError) {
+        const el = document.getElementById('notice');
+        el.style.color = isError ? '#b91c1c' : '#0f766e';
+        el.textContent = text;
+      }
+
+      async function action(label, fn) {
+        try {
+          const result = await fn();
+          if (!result.ok) {
+            showNotice(label + ' 失败: ' + (result.message || 'unknown error'), true);
+            return;
+          }
+          showNotice(label + ' 成功');
+          await load();
+        } catch (error) {
+          showNotice(label + ' 失败: ' + String(error), true);
+        }
+      }
+
+      window.createInstance = async function(runtime) {
+        await action('创建实例', () => postJson('/api/instances', { runtime }));
+      }
+
+      window.useInstance = async function(instanceId) {
+        await action('切换实例', () => postJson('/api/instances/' + instanceId + '/use'));
+      }
+
+      window.stopInstance = async function(instanceId) {
+        await action('停止任务', () => postJson('/api/instances/' + instanceId + '/stop'));
+      }
+
+      window.resetInstance = async function(instanceId) {
+        await action('重置实例', () => postJson('/api/instances/' + instanceId + '/reset'));
+      }
+
+      window.killInstance = async function(instanceId) {
+        await action('强杀实例', () => postJson('/api/instances/' + instanceId + '/kill'));
+      }
+
+      window.showLogs = async function(instanceId) {
+        try {
+          const res = await fetch('/api/instances/' + instanceId + '/logs');
+          const payload = await res.json();
+          if (!payload.ok) {
+            showNotice('读取日志失败: ' + (payload.message || 'unknown error'), true);
+            return;
+          }
+          const log = payload.data?.transcript?.trim() || '暂无日志。';
+          alert(log.slice(-5000));
+        } catch (error) {
+          showNotice('读取日志失败: ' + String(error), true);
+        }
+      }
+
       async function load() {
         const [statusRes, instancesRes] = await Promise.all([fetch('/api/status'), fetch('/api/instances')]);
         const status = await statusRes.json();
@@ -66,6 +138,13 @@ export async function createWebServer(app: BridgeApp) {
           '<td>' + instance.status + '</td>' +
           '<td>' + (instance.currentTaskId || '-') + '</td>' +
           '<td>' + instance.lastActiveAt + '</td>' +
+          '<td><div class="ops">' +
+            '<button class="btn small secondary" onclick="useInstance(\\'' + instance.instanceId + '\\')">使用</button>' +
+            '<button class="btn small secondary" onclick="stopInstance(\\'' + instance.instanceId + '\\')">停止</button>' +
+            '<button class="btn small secondary" onclick="resetInstance(\\'' + instance.instanceId + '\\')">重置</button>' +
+            '<button class="btn small danger" onclick="killInstance(\\'' + instance.instanceId + '\\')">强杀</button>' +
+            '<button class="btn small" onclick="showLogs(\\'' + instance.instanceId + '\\')">日志</button>' +
+          '</div></td>' +
           '</tr>').join('');
         document.getElementById('app').innerHTML =
           '<div class="grid">' +
@@ -74,8 +153,12 @@ export async function createWebServer(app: BridgeApp) {
             '<div class="card"><div class="label">任务数量</div><div class="value">' + state.tasks.length + '</div></div>' +
           '</div>' +
           '<div class="section-title">受管实例</div>' +
-          '<table><thead><tr><th>ID</th><th>运行时</th><th>状态</th><th>当前任务</th><th>最后活跃</th></tr></thead><tbody>' +
-            (rows || '<tr><td colspan="5">当前还没有实例。</td></tr>') +
+          '<div class="toolbar">' +
+            '<button class="btn" onclick="createInstance(\\'codex\\')">新建 Codex 实例</button>' +
+            '<button class="btn" onclick="createInstance(\\'claude\\')">新建 Claude 实例</button>' +
+          '</div>' +
+          '<table><thead><tr><th>ID</th><th>运行时</th><th>状态</th><th>当前任务</th><th>最后活跃</th><th>操作</th></tr></thead><tbody>' +
+            (rows || '<tr><td colspan="6">当前还没有实例。</td></tr>') +
           '</tbody></table>' +
           '<div class="section-title">最近输出预览</div>' +
           '<div class="log">' + (state.tasks[0]?.outputPreview || '当前还没有任务输出。') + '</div>';

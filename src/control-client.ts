@@ -15,6 +15,9 @@ async function call<T>(
     headers: body ? { "content-type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined
   });
+  if (!response.ok) {
+    throw new Error(`Local control API failed: ${response.status} ${response.statusText}`);
+  }
   return response.json() as Promise<CommandResult<T>>;
 }
 

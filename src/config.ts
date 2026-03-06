@@ -56,6 +56,7 @@ export type AppPaths = {
   configFile: string;
   stateFile: string;
   logFile: string;
+  daemonPidFile: string;
 };
 
 export function getAppPaths(): AppPaths {
@@ -64,7 +65,8 @@ export function getAppPaths(): AppPaths {
     rootDir,
     configFile: path.join(rootDir, "config.json"),
     stateFile: path.join(rootDir, "state.json"),
-    logFile: path.join(rootDir, "events.log")
+    logFile: path.join(rootDir, "events.log"),
+    daemonPidFile: path.join(rootDir, "daemon.pid")
   };
 }
 

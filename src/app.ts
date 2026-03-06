@@ -127,7 +127,13 @@ export class BridgeApp {
   async runTelegramLoop(): Promise<void> {
     await this.supervisor.recoverOrphans();
     while (true) {
-      const updates = await this.telegram.getUpdates(this.pollOffset);
+      let updates: Array<Record<string, unknown>> = [];
+      try {
+        updates = await this.telegram.getUpdates(this.pollOffset);
+      } catch {
+        await delay(1500);
+        continue;
+      }
       for (const update of updates) {
         const updateId = typeof update.update_id === "number" ? update.update_id : null;
         if (typeof updateId === "number") {
@@ -166,7 +172,11 @@ export class BridgeApp {
       return;
     }
 
-    await this.handleTelegramCommand({ chatId, userId }, text);
+    try {
+      await this.handleTelegramCommand({ chatId, userId }, text);
+    } catch (error) {
+      await this.telegram.sendMessage(chatId, `命令执行失败：${String(error)}`);
+    }
   }
 
   private async handleTelegramCommand(ctx: TelegramContext, text: string): Promise<void> {
@@ -248,7 +258,13 @@ export class BridgeApp {
 
       const task = await this.supervisor.ask(instance.instanceId, prompt, async (event) => {
         await this.handleTelegramTaskEvent(ctx.chatId, ack.message_id, instance.instanceId, event);
-        if (event.type === "partial_text" || event.type === "tool_event" || event.type === "status" || event.type === "final_text") {
+        if (
+          event.type === "partial_text" ||
+          event.type === "tool_event" ||
+          event.type === "status" ||
+          event.type === "final_text" ||
+          event.type === "error"
+        ) {
           buffer = `${buffer}\n${event.text}`.trim();
           draft.update(buffer);
         }
@@ -256,11 +272,12 @@ export class BridgeApp {
           stopped = true;
           clearInterval(ticker);
           await draft.flush();
-          await this.telegram.editMessageText(
-            ctx.chatId,
-            ack.message_id,
-            truncateForTelegram(`${buffer}\n\n[${event.code === 0 ? "success" : "failed"}] task=${event.taskId}`)
-          );
+          const finalText = truncateForTelegram(`${buffer}\n\n[${event.code === 0 ? "success" : "failed"}] task=${event.taskId}`);
+          try {
+            await this.telegram.editMessageText(ctx.chatId, ack.message_id, finalText);
+          } catch {
+            await this.telegram.sendMessage(ctx.chatId, finalText);
+          }
         }
       });
 
@@ -340,4 +357,8 @@ async function assertPortAvailable(host: string, port: number): Promise<void> {
       });
     });
   });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
