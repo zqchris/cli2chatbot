@@ -42,19 +42,22 @@ export async function createWebServer(app: BridgeApp) {
   <body>
     <main>
       <h1>cli2chatbot</h1>
-      <div class="sub">Telegram 驱动的 Codex / Claude 本地控制面板。</div>
+      <div class="sub">Telegram 远程控制台：多实例、工作目录、授权与连接监控。</div>
       <div class="intro">
         <div class="card">
           <p>
-            这是 bridge daemon 的本地监控界面。远程控制主要走 Telegram 私聊，
-            这个页面负责在本机查看实例状态、任务输出预览，以及做基础排障。
+            这是 bridge daemon 的本地控制台。日常操作建议在 Telegram 里通过
+            <code>/menu</code> 按钮完成；本页面用于查看授权用户、连接状态、实例与任务，
+            并执行本机侧运维操作（批准/踢掉用户、重置/强杀实例、查看日志）。
           </p>
         </div>
-        <div class="tips">/start_codex
+        <div class="tips">/menu
+/start_codex
 /start_claude
 /use &lt;instanceId&gt;
 /cwd &lt;path&gt;
-/ask &lt;prompt&gt;
+/model [runtime] &lt;name&gt;
+/ask &lt;prompt&gt;（也可直接发文本）
 /stop
 /reset
 /kill
