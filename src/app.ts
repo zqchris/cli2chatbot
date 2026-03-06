@@ -314,10 +314,10 @@ export class BridgeApp {
           draft.update(draftText);
         }
         if (event.type === "final_text" && event.text.trim()) {
-          finalText = event.text.trim();
+          finalText = sanitizeFinalTelegramText(event.text) ?? event.text.trim();
         }
         if (event.type === "error" && event.text.trim()) {
-          finalText = event.text.trim();
+          finalText = sanitizeFinalTelegramText(event.text) ?? event.text.trim();
         }
         if (event.type === "exit") {
           stopped = true;
@@ -469,14 +469,14 @@ function sanitizeDisplayText(input: string, fromTool: boolean): string | null {
 
   if (!fromTool) {
     let mergedText = lines.join("\n");
-    if (mergedText.length > 2200) {
-      mergedText = `${mergedText.slice(0, 2100)}\n... (输出过长，已截断)`;
+    if (mergedText.length > 1800) {
+      mergedText = `${mergedText.slice(0, 1700)}\n... (输出过长，已截断)`;
     }
     return mergedText;
   }
 
   // Tool output can be very verbose; keep the first N lines only.
-  const maxLines = 16;
+  const maxLines = 8;
   const clipped = lines.slice(0, maxLines);
   const omitted = lines.length - clipped.length;
   let merged = clipped.join("\n");
@@ -484,10 +484,48 @@ function sanitizeDisplayText(input: string, fromTool: boolean): string | null {
     merged = `${merged}\n... (省略 ${omitted} 行)`;
   }
 
-  if (merged.length > 1200) {
-    merged = `${merged.slice(0, 1100)}\n... (输出过长，已截断)`;
+  if (merged.length > 700) {
+    merged = `${merged.slice(0, 620)}\n... (输出过长，已截断)`;
   }
   return merged.trim() || null;
+}
+
+function sanitizeFinalTelegramText(input: string): string | null {
+  const base = sanitizeDisplayText(input, false);
+  if (!base) {
+    return null;
+  }
+  const filtered = base
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        return true;
+      }
+      if (/^[•*-]?\s*(ran|explored)\b/i.test(trimmed)) {
+        return false;
+      }
+      if (/^[└├│]\s*(read|list|search|ran)\b/i.test(trimmed.toLowerCase())) {
+        return false;
+      }
+      return true;
+    })
+    .join("\n")
+    .trim();
+
+  if (!filtered) {
+    return null;
+  }
+  return truncateLongCodeBlocks(filtered, 700);
+}
+
+function truncateLongCodeBlocks(input: string, maxBlockChars: number): string {
+  return input.replace(/```([\s\S]*?)```/g, (_all, body: string) => {
+    if (body.length <= maxBlockChars) {
+      return `\`\`\`${body}\`\`\``;
+    }
+    return `\`\`\`${body.slice(0, maxBlockChars)}\n... (代码块过长，已截断)\n\`\`\``;
+  });
 }
 
 function mergeDraftText(current: string, chunk: string, eventType: StreamEvent["type"]): string {
