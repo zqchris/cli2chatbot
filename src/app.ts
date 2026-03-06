@@ -348,18 +348,34 @@ export class BridgeApp {
       return;
     }
 
-    if (text.startsWith("/use ")) {
+    if (text === "/use" || text.startsWith("/use ")) {
       const instanceId = text.slice(5).trim();
+      if (!instanceId) {
+        const instances = await this.supervisor.listInstances();
+        if (instances.length === 0) {
+          await this.telegram.sendMessage(ctx.chatId, "用法：/use <instanceId>\n当前暂无实例，请先 /start_codex 或 /start_claude。");
+          return;
+        }
+        await this.telegram.sendMessage(
+          ctx.chatId,
+          [
+            "用法：/use <instanceId>",
+            "可用实例：",
+            ...instances.map((instance) => `- ${instance.instanceId} (${instance.runtime}, ${instance.status})`)
+          ].join("\n")
+        );
+        return;
+      }
       const instance = await this.supervisor.getInstance(instanceId);
       await this.supervisor.setCurrentInstance(instance.runtime, instanceId);
       await this.telegram.sendMessage(ctx.chatId, `已切换到 ${instance.runtime} 实例 ${instanceId}`);
       return;
     }
 
-    if (text.startsWith("/ask ")) {
+    if (text === "/ask" || text.startsWith("/ask ")) {
       const prompt = text.slice(5).trim();
       if (!prompt) {
-        await this.telegram.sendMessage(ctx.chatId, "请提供 prompt。");
+        await this.telegram.sendMessage(ctx.chatId, "用法：/ask <prompt>");
         return;
       }
       const instance = await this.supervisor.selectedInstance();
@@ -452,7 +468,7 @@ export class BridgeApp {
       return;
     }
 
-    if (text.startsWith("/setargs ")) {
+    if (text === "/setargs" || text.startsWith("/setargs ")) {
       const body = text.slice("/setargs ".length).trim();
       const firstSpace = body.indexOf(" ");
       if (firstSpace <= 0) {
@@ -472,7 +488,7 @@ export class BridgeApp {
       return;
     }
 
-    if (text.startsWith("/clearargs ")) {
+    if (text === "/clearargs" || text.startsWith("/clearargs ")) {
       const runtime = this.parseRuntimeToken(text.slice("/clearargs ".length).trim());
       if (!runtime) {
         await this.telegram.sendMessage(ctx.chatId, "用法：/clearargs <codex|claude>");
@@ -483,7 +499,7 @@ export class BridgeApp {
       return;
     }
 
-    if (text.startsWith("/model ")) {
+    if (text === "/model" || text.startsWith("/model ")) {
       const body = text.slice("/model ".length).trim();
       const firstSpace = body.indexOf(" ");
       if (firstSpace <= 0) {
