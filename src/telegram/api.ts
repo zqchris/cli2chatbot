@@ -4,6 +4,10 @@ type TelegramApiResult<T> = {
   description?: string;
 };
 
+export type TelegramTextOptions = {
+  parseMode?: "HTML";
+};
+
 export class TelegramApi {
   constructor(private readonly token: string) {}
 
@@ -28,15 +32,26 @@ export class TelegramApi {
     return this.call("getUpdates", { offset, timeout: 20, allowed_updates: ["message"] });
   }
 
-  sendMessage(chatId: string, text: string): Promise<{ message_id: number }> {
-    return this.call("sendMessage", { chat_id: chatId, text, disable_web_page_preview: true });
+  sendMessage(chatId: string, text: string, options?: TelegramTextOptions): Promise<{ message_id: number }> {
+    return this.call("sendMessage", {
+      chat_id: chatId,
+      text,
+      ...(options?.parseMode ? { parse_mode: options.parseMode } : {}),
+      disable_web_page_preview: true
+    });
   }
 
-  editMessageText(chatId: string, messageId: number, text: string): Promise<{ message_id: number }> {
+  editMessageText(
+    chatId: string,
+    messageId: number,
+    text: string,
+    options?: TelegramTextOptions
+  ): Promise<{ message_id: number }> {
     return this.call("editMessageText", {
       chat_id: chatId,
       message_id: messageId,
       text,
+      ...(options?.parseMode ? { parse_mode: options.parseMode } : {}),
       disable_web_page_preview: true
     });
   }

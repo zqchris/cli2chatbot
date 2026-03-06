@@ -331,13 +331,7 @@ export class BridgeApp {
           const terminalText = event.code === 0
             ? (finalText || draftText || `[success] task=${event.taskId}`)
             : `${finalText || draftText || "任务失败。"}\n\n[failed] task=${event.taskId}`;
-          await this.telegram.editMessageText(
-            ctx.chatId,
-            ack.message_id,
-            truncateForTelegram(terminalText, 3500)
-          ).catch(async () => {
-            await this.telegram.sendMessage(ctx.chatId, truncateForTelegram(terminalText, 3500));
-          });
+          await this.publishTerminalMessage(ctx.chatId, ack.message_id, terminalText);
         }
       });
 
@@ -394,6 +388,25 @@ export class BridgeApp {
     return;
   }
 
+  private async publishTerminalMessage(chatId: string, messageId: number, rawText: string): Promise<void> {
+    const formatted = formatTelegramFinalDelivery(rawText);
+    try {
+      await this.telegram.editMessageText(chatId, messageId, formatted.text, {
+        parseMode: formatted.parseMode
+      });
+      return;
+    } catch {
+      if (formatted.parseMode) {
+        const plain = stripSimpleMarkdown(formatted.fallbackPlain);
+        await this.telegram.editMessageText(chatId, messageId, plain).catch(async () => {
+          await this.telegram.sendMessage(chatId, plain);
+        });
+        return;
+      }
+      await this.telegram.sendMessage(chatId, formatted.text);
+    }
+  }
+
   private async recordPendingAuth(payload: PendingAuthPayload): Promise<void> {
     const state = await this.store.read();
     const existing = state.pendingAuthRequests.find((candidate) => candidate.userId === payload.userId);
@@ -422,6 +435,124 @@ function truncateForTelegram(text: string, maxLen = 3500): string {
     return normalized;
   }
   return `${normalized.slice(0, Math.max(0, maxLen - 100))}\n\n[输出过长，更多内容请用 /logs 或 /web 查看]`;
+}
+
+type TelegramFinalDelivery = {
+  text: string;
+  parseMode?: "HTML";
+  fallbackPlain: string;
+};
+
+function formatTelegramFinalDelivery(rawText: string): TelegramFinalDelivery {
+  const plain = truncateForTelegram(rawText, 3500);
+  if (plain.includes("[输出过长")) {
+    return { text: stripSimpleMarkdown(plain), fallbackPlain: plain };
+  }
+  const rendered = renderSimpleMarkdownToTelegramHtml(plain);
+  if (!rendered.usedFormatting) {
+    return { text: plain, fallbackPlain: plain };
+  }
+  if (rendered.html.length > 3900) {
+    return { text: stripSimpleMarkdown(plain), fallbackPlain: plain };
+  }
+  return {
+    text: rendered.html,
+    parseMode: "HTML",
+    fallbackPlain: plain
+  };
+}
+
+function renderSimpleMarkdownToTelegramHtml(input: string): { html: string; usedFormatting: boolean } {
+  const lines = input.replace(/\r\n/g, "\n").split("\n");
+  const out: string[] = [];
+  let inCodeBlock = false;
+  let usedFormatting = false;
+
+  for (const line of lines) {
+    if (line.trimStart().startsWith("```")) {
+      if (!inCodeBlock) {
+        out.push("<pre><code>");
+      } else {
+        out.push("</code></pre>");
+      }
+      inCodeBlock = !inCodeBlock;
+      usedFormatting = true;
+      continue;
+    }
+    if (inCodeBlock) {
+      out.push(escapeTelegramHtml(line));
+      continue;
+    }
+
+    const heading = line.match(/^\s{0,3}#{1,6}\s+(.*)$/);
+    if (heading?.[1]) {
+      out.push(`<b>${renderInlineMarkdown(heading[1])}</b>`);
+      usedFormatting = true;
+      continue;
+    }
+
+    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+    if (bullet?.[1]) {
+      out.push(`• ${renderInlineMarkdown(bullet[1])}`);
+      usedFormatting = true;
+      continue;
+    }
+
+    const numbered = line.match(/^\s*(\d+)\.\s+(.*)$/);
+    if (numbered?.[1] && numbered?.[2]) {
+      out.push(`${numbered[1]}. ${renderInlineMarkdown(numbered[2])}`);
+      usedFormatting = true;
+      continue;
+    }
+
+    const inline = renderInlineMarkdown(line);
+    if (inline !== escapeTelegramHtml(line)) {
+      usedFormatting = true;
+    }
+    out.push(inline);
+  }
+
+  if (inCodeBlock) {
+    out.push("</code></pre>");
+  }
+  return { html: out.join("\n"), usedFormatting };
+}
+
+function renderInlineMarkdown(line: string): string {
+  const codeSlots: string[] = [];
+  const withPlaceholders = line.replace(/`([^`\n]+)`/g, (_all, code: string) => {
+    const token = `@@CODE_SLOT_${codeSlots.length}@@`;
+    codeSlots.push(`<code>${escapeTelegramHtml(code)}</code>`);
+    return token;
+  });
+
+  let escaped = escapeTelegramHtml(withPlaceholders);
+  escaped = escaped.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+  escaped = escaped.replace(/\*([^*\n]+)\*/g, "<i>$1</i>");
+  escaped = escaped.replace(/~~([^~\n]+)~~/g, "<s>$1</s>");
+
+  for (let i = 0; i < codeSlots.length; i += 1) {
+    const token = `@@CODE_SLOT_${i}@@`;
+    const slot = codeSlots[i] ?? "";
+    escaped = escaped.replace(token, slot);
+  }
+  return escaped;
+}
+
+function escapeTelegramHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function stripSimpleMarkdown(input: string): string {
+  return input
+    .replace(/```[\s\S]*?```/g, (block) => block.replace(/```/g, ""))
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/~~([^~]+)~~/g, "$1")
+    .replace(/`([^`]+)`/g, "$1");
 }
 
 function loadingFrame(index: number): string {
