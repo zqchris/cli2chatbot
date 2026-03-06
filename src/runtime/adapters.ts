@@ -38,8 +38,8 @@ function buildArgs(runtime: RuntimeKind, prompt: string, config: AppConfig): str
       "exec",
       "--skip-git-repo-check",
       "--json",
-      prompt,
-      ...config.runtimes.codex.defaultArgs
+      ...config.runtimes.codex.defaultArgs,
+      prompt
     ];
   }
 
@@ -48,8 +48,8 @@ function buildArgs(runtime: RuntimeKind, prompt: string, config: AppConfig): str
     "--verbose",
     "--output-format=stream-json",
     "--include-partial-messages",
-    prompt,
-    ...config.runtimes.claude.defaultArgs
+    ...config.runtimes.claude.defaultArgs,
+    prompt
   ];
 }
 

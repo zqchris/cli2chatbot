@@ -8,6 +8,11 @@ export type TelegramTextOptions = {
   parseMode?: "HTML";
 };
 
+export type TelegramBotCommand = {
+  command: string;
+  description: string;
+};
+
 export class TelegramApi {
   constructor(private readonly token: string) {}
 
@@ -30,6 +35,10 @@ export class TelegramApi {
 
   getUpdates(offset?: number): Promise<Array<Record<string, unknown>>> {
     return this.call("getUpdates", { offset, timeout: 20, allowed_updates: ["message"] });
+  }
+
+  setMyCommands(commands: TelegramBotCommand[]): Promise<true> {
+    return this.call("setMyCommands", { commands });
   }
 
   sendMessage(chatId: string, text: string, options?: TelegramTextOptions): Promise<{ message_id: number }> {

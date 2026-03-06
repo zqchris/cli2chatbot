@@ -22,6 +22,27 @@ type PendingAuthPayload = {
   text: string | null;
 };
 
+const TELEGRAM_NATIVE_COMMANDS = [
+  { command: "help", description: "显示命令帮助" },
+  { command: "status", description: "查看 bridge 状态" },
+  { command: "instances", description: "列出全部实例" },
+  { command: "current", description: "查看当前实例" },
+  { command: "start_codex", description: "创建 codex 实例" },
+  { command: "start_claude", description: "创建 claude 实例" },
+  { command: "use", description: "切换实例: /use <id>" },
+  { command: "ask", description: "向当前实例提问" },
+  { command: "args", description: "查看运行参数" },
+  { command: "setargs", description: "设置参数: /setargs <runtime> <args>" },
+  { command: "clearargs", description: "清空参数: /clearargs <runtime>" },
+  { command: "model", description: "设置模型: /model <runtime> <name>" },
+  { command: "restart", description: "重建当前实例" },
+  { command: "stop", description: "停止当前任务" },
+  { command: "reset", description: "重置当前实例上下文" },
+  { command: "kill", description: "强杀当前实例" },
+  { command: "logs", description: "查看当前实例日志摘要" },
+  { command: "web", description: "查看本地面板地址" }
+];
+
 export class BridgeApp {
   readonly store: StateStore;
   readonly supervisor: InstanceSupervisor;
@@ -160,6 +181,7 @@ export class BridgeApp {
 
   async runTelegramLoop(): Promise<void> {
     await this.supervisor.recoverOrphans();
+    await this.syncTelegramCommandMenu();
     while (true) {
       let updates: Array<Record<string, unknown>> = [];
       try {
@@ -223,11 +245,53 @@ export class BridgeApp {
     }
   }
 
+  private async syncTelegramCommandMenu(): Promise<void> {
+    await this.telegram.setMyCommands(TELEGRAM_NATIVE_COMMANDS).catch(() => undefined);
+  }
+
+  private parseRuntimeToken(value: string): RuntimeKind | null {
+    if (value === "codex" || value === "claude") {
+      return value;
+    }
+    return null;
+  }
+
+  private async setRuntimeArgs(runtime: RuntimeKind, args: string[]): Promise<void> {
+    this.config.runtimes[runtime].defaultArgs = args;
+    await saveConfig(this.config);
+  }
+
+  private runtimeArgsText(runtime: RuntimeKind): string {
+    const args = this.config.runtimes[runtime].defaultArgs;
+    if (!args || args.length === 0) {
+      return `${runtime}: (none)`;
+    }
+    return `${runtime}: ${args.join(" ")}`;
+  }
+
   private async handleTelegramCommand(ctx: TelegramContext, text: string): Promise<void> {
     if (text === "/help") {
       await this.telegram.sendMessage(
         ctx.chatId,
-        ["/status", "/instances", "/start_codex", "/start_claude", "/use <id>", "/ask <text>", "/stop", "/reset", "/kill", "/logs", "/web"].join("\n")
+        [
+          "/status",
+          "/instances",
+          "/current",
+          "/start_codex",
+          "/start_claude",
+          "/use <id>",
+          "/ask <text>",
+          "/args [codex|claude]",
+          "/setargs <runtime> <args...>",
+          "/clearargs <runtime>",
+          "/model <runtime> <model>",
+          "/restart",
+          "/stop",
+          "/reset",
+          "/kill",
+          "/logs",
+          "/web"
+        ].join("\n")
       );
       return;
     }
@@ -243,11 +307,36 @@ export class BridgeApp {
 
     if (text === "/instances") {
       const instances = await this.supervisor.listInstances();
+      const current = await this.supervisor.selectedInstance();
       await this.telegram.sendMessage(
         ctx.chatId,
         instances.length === 0
           ? "暂无实例。"
-          : instances.map((instance) => `${instance.instanceId} ${instance.runtime} ${instance.status} cwd=${instance.cwd}`).join("\n")
+          : instances
+            .map((instance) => {
+              const marker = current?.instanceId === instance.instanceId ? "👉 " : "";
+              return `${marker}${instance.instanceId} ${instance.runtime} ${instance.status} cwd=${instance.cwd}`;
+            })
+            .join("\n")
+      );
+      return;
+    }
+
+    if (text === "/current") {
+      const current = await this.supervisor.selectedInstance();
+      if (!current) {
+        await this.telegram.sendMessage(ctx.chatId, "当前没有实例。");
+        return;
+      }
+      await this.telegram.sendMessage(
+        ctx.chatId,
+        [
+          `instance=${current.instanceId}`,
+          `runtime=${current.runtime}`,
+          `status=${current.status}`,
+          `cwd=${current.cwd}`,
+          `args=${this.config.runtimes[current.runtime].defaultArgs.join(" ") || "(none)"}`
+        ].join("\n")
       );
       return;
     }
@@ -342,6 +431,90 @@ export class BridgeApp {
         target.currentTaskId = task.taskId;
         await this.store.write(stateForBinding);
       }
+      return;
+    }
+
+    if (text === "/args" || text.startsWith("/args ")) {
+      const token = text === "/args" ? "" : text.slice(6).trim();
+      if (!token) {
+        await this.telegram.sendMessage(
+          ctx.chatId,
+          [this.runtimeArgsText("codex"), this.runtimeArgsText("claude")].join("\n")
+        );
+        return;
+      }
+      const runtime = this.parseRuntimeToken(token);
+      if (!runtime) {
+        await this.telegram.sendMessage(ctx.chatId, "用法：/args [codex|claude]");
+        return;
+      }
+      await this.telegram.sendMessage(ctx.chatId, this.runtimeArgsText(runtime));
+      return;
+    }
+
+    if (text.startsWith("/setargs ")) {
+      const body = text.slice("/setargs ".length).trim();
+      const firstSpace = body.indexOf(" ");
+      if (firstSpace <= 0) {
+        await this.telegram.sendMessage(ctx.chatId, "用法：/setargs <codex|claude> <args...>");
+        return;
+      }
+      const runtimeToken = body.slice(0, firstSpace).trim();
+      const argText = body.slice(firstSpace + 1).trim();
+      const runtime = this.parseRuntimeToken(runtimeToken);
+      if (!runtime) {
+        await this.telegram.sendMessage(ctx.chatId, "runtime 只能是 codex 或 claude。");
+        return;
+      }
+      const args = parseShellStyleArgs(argText);
+      await this.setRuntimeArgs(runtime, args);
+      await this.telegram.sendMessage(ctx.chatId, `已更新 ${runtime} 参数：${args.join(" ") || "(none)"}`);
+      return;
+    }
+
+    if (text.startsWith("/clearargs ")) {
+      const runtime = this.parseRuntimeToken(text.slice("/clearargs ".length).trim());
+      if (!runtime) {
+        await this.telegram.sendMessage(ctx.chatId, "用法：/clearargs <codex|claude>");
+        return;
+      }
+      await this.setRuntimeArgs(runtime, []);
+      await this.telegram.sendMessage(ctx.chatId, `已清空 ${runtime} 参数。`);
+      return;
+    }
+
+    if (text.startsWith("/model ")) {
+      const body = text.slice("/model ".length).trim();
+      const firstSpace = body.indexOf(" ");
+      if (firstSpace <= 0) {
+        await this.telegram.sendMessage(ctx.chatId, "用法：/model <codex|claude> <model>");
+        return;
+      }
+      const runtimeToken = body.slice(0, firstSpace).trim();
+      const modelName = body.slice(firstSpace + 1).trim();
+      const runtime = this.parseRuntimeToken(runtimeToken);
+      if (!runtime || !modelName) {
+        await this.telegram.sendMessage(ctx.chatId, "用法：/model <codex|claude> <model>");
+        return;
+      }
+      const nextArgs = upsertModelArg(this.config.runtimes[runtime].defaultArgs, modelName);
+      await this.setRuntimeArgs(runtime, nextArgs);
+      await this.telegram.sendMessage(ctx.chatId, `已设置 ${runtime} 模型：${modelName}`);
+      return;
+    }
+
+    if (text === "/restart") {
+      const current = await this.supervisor.selectedInstance();
+      if (!current) {
+        await this.telegram.sendMessage(ctx.chatId, "当前没有实例。先 /start_codex 或 /start_claude。");
+        return;
+      }
+      await this.commandKill(current.instanceId).catch(() => undefined);
+      const next = await this.createInstance(current.runtime);
+      await this.telegram.sendMessage(
+        ctx.chatId,
+        `已重建实例：${current.instanceId} -> ${next.instanceId} (${next.runtime})`
+      );
       return;
     }
 
@@ -701,6 +874,35 @@ function mergeDraftText(current: string, chunk: string, eventType: StreamEvent["
     return chunk;
   }
   return `${current.endsWith("\n") ? current : `${current}\n`}${chunk}`;
+}
+
+function parseShellStyleArgs(input: string): string[] {
+  const matches = input.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+  return matches
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .map((token) => {
+      if (
+        (token.startsWith("\"") && token.endsWith("\"")) ||
+        (token.startsWith("'") && token.endsWith("'"))
+      ) {
+        return token.slice(1, -1);
+      }
+      return token;
+    });
+}
+
+function upsertModelArg(args: string[], modelName: string): string[] {
+  const next: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i] ?? "";
+    if (token === "--model" || token === "-m") {
+      i += 1;
+      continue;
+    }
+    next.push(token);
+  }
+  return ["--model", modelName, ...next];
 }
 
 async function assertPortAvailable(host: string, port: number): Promise<void> {
