@@ -25,7 +25,7 @@
 已经实现：
 
 - 单用户 Telegram 私聊控制
-- allowlist 白名单访问控制
+- 本地批准式 owner 绑定
 - 本地 daemon 模式
 - `codex` / `claude` 逻辑实例池
 - 基于 PTY 的任务执行
@@ -77,7 +77,6 @@ flowchart LR
 - 已安装 `codex` CLI
 - 已安装 `claude` CLI
 - Telegram bot token
-- 你的 Telegram 数字 user id
 
 ## 安装
 
@@ -98,6 +97,7 @@ pnpm dev serve
 
 - Telegram 私聊机器人开始可用
 - 本地面板默认在 `http://127.0.0.1:4567`
+- 第一次给 bot 发私聊消息时，会在本地面板生成待授权请求
 
 ## CLI 命令
 
@@ -114,7 +114,7 @@ pnpm dev serve
 会询问：
 
 - Telegram bot token
-- 允许控制的 Telegram user id
+- 可选的预授权 Telegram user id
 - 默认工作目录
 - `codex` 可执行文件路径
 - `claude` 可执行文件路径
@@ -207,6 +207,7 @@ http://127.0.0.1:4567
 - daemon PID
 - 实例总数
 - 任务总数
+- 待授权 Telegram 请求
 - 受管实例表
 - 最近一次任务输出预览
 
@@ -229,6 +230,8 @@ daemon 会暴露一个仅本机使用的 HTTP API，CLI 在 `serve` 已运行时
 主要接口：
 
 - `GET /api/status`
+- `GET /api/auth/pending`
+- `POST /api/auth/approve/:userId`
 - `GET /api/instances`
 - `POST /api/instances`
 - `POST /api/instances/:instanceId/use`
@@ -271,7 +274,8 @@ daemon 会暴露一个仅本机使用的 HTTP API，CLI 在 `serve` 已运行时
 v1 的安全边界是故意收窄的：
 
 - 只支持 Telegram 私聊
-- 只有 allowlist 中的 Telegram user id 能发命令
+- 首次私聊会进入待授权队列，需在本机面板批准
+- 批准后只有 owner 的 Telegram user id 能发命令
 - Web 面板默认只监听 loopback
 - 没有公网 Web 认证
 - 不支持群聊
@@ -317,6 +321,7 @@ pnpm dev serve
 
 ## 备注
 
-- v1 只支持单个授权 Telegram 用户的私聊控制。
+- v1 只支持单个 owner 的 Telegram 私聊控制，但首次绑定不再要求手填 `user id`。
+- 首次私聊 bot 时会生成待授权请求，需要在本机 Web 面板里点击批准。
 - Web 面板默认监听 `127.0.0.1`。
 - `reset` 目前清的是 bridge 逻辑上下文，不是官方 CLI 深层会话状态。

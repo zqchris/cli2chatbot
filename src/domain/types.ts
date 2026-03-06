@@ -50,6 +50,15 @@ export type TaskRecord = {
   error: string | null;
 };
 
+export type PendingAuthRequest = {
+  userId: string;
+  chatId: string;
+  username: string | null;
+  firstName: string | null;
+  requestedAt: string;
+  lastSeenText: string | null;
+};
+
 export type RuntimeConfig = {
   path: string;
   defaultArgs: string[];
@@ -81,6 +90,7 @@ export type AppConfig = {
 export type PersistedState = {
   currentInstanceId: string | null;
   currentInstanceByRuntime: Partial<Record<RuntimeKind, string>>;
+  pendingAuthRequests: PendingAuthRequest[];
   instances: InstanceRecord[];
   tasks: TaskRecord[];
   daemon: {

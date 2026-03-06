@@ -31,5 +31,6 @@ describe("config", () => {
     state.daemon.pid = 123;
     await saveState(state, paths);
     expect((await loadState(paths)).daemon.pid).toBe(123);
+    expect((await loadState(paths)).pendingAuthRequests).toEqual([]);
   });
 });

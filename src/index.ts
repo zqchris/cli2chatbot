@@ -23,14 +23,14 @@ program
     await ensureAppDir();
     const rl = createInterface({ input, output });
     const botToken = options.botToken ?? await rl.question("Telegram bot token: ");
-    const allowedUser = options.allowedUser ?? await rl.question("Allowed Telegram user id: ");
+    const allowedUser = options.allowedUser ?? await rl.question("Allowed Telegram user id (optional, press enter to skip): ");
     const cwd = options.cwd ?? ((await rl.question("Default working directory: ")) || process.cwd());
     const codexPath = options.codexPath ?? ((await rl.question("Codex executable path [codex]: ")) || "codex");
     const claudePath = options.claudePath ?? ((await rl.question("Claude executable path [claude]: ")) || "claude");
     rl.close();
 
     const config = createDefaultConfig({
-      telegram: { botToken, allowedUserIds: [allowedUser], pollingMode: "long-polling" },
+      telegram: { botToken, allowedUserIds: allowedUser ? [allowedUser] : [], pollingMode: "long-polling" },
       runtimes: {
         defaultCwd: cwd,
         codex: { path: codexPath, defaultArgs: [] },

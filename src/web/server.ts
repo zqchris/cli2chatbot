@@ -112,6 +112,10 @@ export async function createWebServer(app: BridgeApp) {
         await action('强杀实例', () => postJson('/api/instances/' + instanceId + '/kill'));
       }
 
+      window.approveAuth = async function(userId) {
+        await action('批准授权', () => postJson('/api/auth/approve/' + userId));
+      }
+
       window.showLogs = async function(instanceId) {
         try {
           const res = await fetch('/api/instances/' + instanceId + '/logs');
@@ -128,9 +132,10 @@ export async function createWebServer(app: BridgeApp) {
       }
 
       async function load() {
-        const [statusRes, instancesRes] = await Promise.all([fetch('/api/status'), fetch('/api/instances')]);
+        const [statusRes, instancesRes, authRes] = await Promise.all([fetch('/api/status'), fetch('/api/instances'), fetch('/api/auth/pending')]);
         const status = await statusRes.json();
         const instances = await instancesRes.json();
+        const auth = await authRes.json();
         const state = status.data;
         const rows = instances.data.map((instance) => '<tr>' +
           '<td>' + instance.instanceId + '</td>' +
@@ -146,12 +151,24 @@ export async function createWebServer(app: BridgeApp) {
             '<button class="btn small" onclick="showLogs(\\'' + instance.instanceId + '\\')">日志</button>' +
           '</div></td>' +
           '</tr>').join('');
+        const authRows = auth.data.map((request) => '<tr>' +
+          '<td>' + request.userId + '</td>' +
+          '<td>' + ((request.firstName || '-') + (request.username ? ' (@' + request.username + ')' : '')) + '</td>' +
+          '<td>' + request.requestedAt + '</td>' +
+          '<td>' + (request.lastSeenText || '-') + '</td>' +
+          '<td><button class="btn small" onclick="approveAuth(\\'' + request.userId + '\\')">批准</button></td>' +
+          '</tr>').join('');
         document.getElementById('app').innerHTML =
           '<div class="grid">' +
             '<div class="card"><div class="label">daemon 进程</div><div class="value">' + (state.daemon.pid || '-') + '</div></div>' +
             '<div class="card"><div class="label">实例数量</div><div class="value">' + state.instances.length + '</div></div>' +
             '<div class="card"><div class="label">任务数量</div><div class="value">' + state.tasks.length + '</div></div>' +
+            '<div class="card"><div class="label">待授权请求</div><div class="value">' + auth.data.length + '</div></div>' +
           '</div>' +
+          '<div class="section-title">待授权 Telegram 用户</div>' +
+          '<table><thead><tr><th>User ID</th><th>账号</th><th>请求时间</th><th>最近消息</th><th>操作</th></tr></thead><tbody>' +
+            (authRows || '<tr><td colspan="5">当前没有待授权请求。</td></tr>') +
+          '</tbody></table>' +
           '<div class="section-title">受管实例</div>' +
           '<div class="toolbar">' +
             '<button class="btn" onclick="createInstance(\\'codex\\')">新建 Codex 实例</button>' +
@@ -172,6 +189,10 @@ export async function createWebServer(app: BridgeApp) {
 
   server.get("/api/status", async () => app.commandStatus());
   server.get("/api/instances", async () => app.commandInstances());
+  server.get("/api/auth/pending", async () => app.commandPendingAuth());
+  server.post<{ Params: { userId: string } }>("/api/auth/approve/:userId", async (request) =>
+    app.commandApproveAuth(request.params.userId)
+  );
   server.post<{ Body: { runtime: "codex" | "claude" } }>("/api/instances", async (request) => {
     return app.commandCreateInstance(request.body.runtime);
   });

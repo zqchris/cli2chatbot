@@ -3,7 +3,7 @@ import net from "node:net";
 import { randomUUID } from "node:crypto";
 import { unlink, writeFile } from "node:fs/promises";
 import type { AppConfig, CommandResult, DoctorResult, InstanceRecord, PersistedState, RuntimeKind, StreamEvent } from "./domain/types.js";
-import { ensureAppDir } from "./config.js";
+import { ensureAppDir, saveConfig } from "./config.js";
 import { StateStore } from "./store.js";
 import { InstanceSupervisor } from "./runtime/supervisor.js";
 import { TelegramApi } from "./telegram/api.js";
@@ -12,6 +12,14 @@ import { createDraftStreamLoop } from "./telegram/draft-loop.js";
 type TelegramContext = {
   chatId: string;
   userId: string;
+};
+
+type PendingAuthPayload = {
+  chatId: string;
+  userId: string;
+  username: string | null;
+  firstName: string | null;
+  text: string | null;
 };
 
 export class BridgeApp {
@@ -124,6 +132,32 @@ export class BridgeApp {
     return { ok: true, message: "ok", data: { transcript: instance.transcript } };
   }
 
+  async commandPendingAuth(): Promise<CommandResult<PersistedState["pendingAuthRequests"]>> {
+    const state = await this.store.read();
+    return { ok: true, message: "ok", data: state.pendingAuthRequests };
+  }
+
+  async commandApproveAuth(userId: string): Promise<CommandResult<{ userId: string }>> {
+    const state = await this.store.read();
+    const pending = state.pendingAuthRequests.find((candidate) => candidate.userId === userId);
+    if (!pending) {
+      return { ok: false, message: `No pending auth request for ${userId}.` };
+    }
+
+    if (!this.config.telegram.allowedUserIds.includes(userId)) {
+      this.config.telegram.allowedUserIds.push(userId);
+      await saveConfig(this.config);
+    }
+
+    state.pendingAuthRequests = state.pendingAuthRequests.filter((candidate) => candidate.userId !== userId);
+    await this.store.write(state);
+    await this.telegram.sendMessage(
+      pending.chatId,
+      "已通过本机面板授权。现在可以直接使用 /help 查看命令。"
+    ).catch(() => undefined);
+    return { ok: true, message: `Approved ${userId}.`, data: { userId } };
+  }
+
   async runTelegramLoop(): Promise<void> {
     await this.supervisor.recoverOrphans();
     while (true) {
@@ -168,7 +202,17 @@ export class BridgeApp {
       return;
     }
     if (!this.isAllowedUser(userId)) {
-      await this.telegram.sendMessage(chatId, "未授权用户。");
+      await this.recordPendingAuth({
+        chatId,
+        userId,
+        username: typeof from.username === "string" ? from.username : null,
+        firstName: typeof from.first_name === "string" ? from.first_name : null,
+        text
+      });
+      await this.telegram.sendMessage(
+        chatId,
+        "已记录授权请求。请在本机 Web 面板批准这个 Telegram 账号，批准后再继续发送命令。"
+      );
       return;
     }
 
@@ -332,6 +376,27 @@ export class BridgeApp {
     _event: StreamEvent
   ): Promise<void> {
     return;
+  }
+
+  private async recordPendingAuth(payload: PendingAuthPayload): Promise<void> {
+    const state = await this.store.read();
+    const existing = state.pendingAuthRequests.find((candidate) => candidate.userId === payload.userId);
+    if (existing) {
+      existing.chatId = payload.chatId;
+      existing.username = payload.username;
+      existing.firstName = payload.firstName;
+      existing.lastSeenText = payload.text;
+    } else {
+      state.pendingAuthRequests.unshift({
+        userId: payload.userId,
+        chatId: payload.chatId,
+        username: payload.username,
+        firstName: payload.firstName,
+        requestedAt: new Date().toISOString(),
+        lastSeenText: payload.text
+      });
+    }
+    await this.store.write(state);
   }
 }
 

@@ -12,7 +12,7 @@ const runtimeConfigSchema = z.object({
 const configSchema = z.object({
   telegram: z.object({
     botToken: z.string().min(1),
-    allowedUserIds: z.array(z.string().min(1)).min(1),
+    allowedUserIds: z.array(z.string().min(1)).default([]),
     pollingMode: z.literal("long-polling").default("long-polling")
   }),
   runtimes: z.object({
@@ -38,6 +38,7 @@ const stateSchema = z.object({
     codex: z.string().optional(),
     claude: z.string().optional()
   }).default({}),
+  pendingAuthRequests: z.array(z.any()).default([]),
   instances: z.array(z.any()).default([]),
   tasks: z.array(z.any()).default([]),
   daemon: z.object({
@@ -105,6 +106,7 @@ export function createDefaultState(): PersistedState {
   return {
     currentInstanceId: null,
     currentInstanceByRuntime: {},
+    pendingAuthRequests: [],
     instances: [],
     tasks: [],
     daemon: {
@@ -146,6 +148,7 @@ export async function loadState(paths = getAppPaths()): Promise<PersistedState> 
     return {
       currentInstanceId: parsed.currentInstanceId,
       currentInstanceByRuntime: parsed.currentInstanceByRuntime,
+      pendingAuthRequests: parsed.pendingAuthRequests as PersistedState["pendingAuthRequests"],
       instances: parsed.instances as PersistedState["instances"],
       tasks: parsed.tasks as PersistedState["tasks"],
       daemon: parsed.daemon as PersistedState["daemon"]
