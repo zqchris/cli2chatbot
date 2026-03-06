@@ -432,7 +432,7 @@ function formatTelegramDisplayChunk(event: StreamEvent): string | null {
     return null;
   }
   if (event.type === "tool_event") {
-    return sanitizeDisplayText(event.text, true);
+    return null;
   }
   if (event.type === "partial_text" || event.type === "error") {
     return sanitizeDisplayText(event.text, false);

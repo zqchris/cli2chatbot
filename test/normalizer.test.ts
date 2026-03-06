@@ -2,22 +2,28 @@ import { describe, expect, it } from "vitest";
 import { normalizeRuntimeChunk } from "../src/runtime/normalizer.js";
 
 describe("normalizeRuntimeChunk", () => {
-  it("classifies codex tool and status events", () => {
+  it("extracts codex structured tool and assistant events", () => {
     const events = normalizeRuntimeChunk(
       "codex",
       "task1",
-      '{"msg":"hello"}\n{"type":"tool_call","message":"running shell"}\n{"type":"status","message":"progress"}\n'
+      [
+        '{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"pwd"}}',
+        '{"type":"item.completed","item":{"id":"item_0","type":"command_execution","aggregated_output":"/tmp\\n"}}',
+        '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}'
+      ].join("\n")
     );
-    expect(events.map((event) => event.type)).toEqual(["partial_text", "tool_event", "status"]);
+    expect(events.map((event) => event.type)).toEqual(["tool_event", "final_text"]);
+    expect(events[0]?.type === "tool_event" ? events[0].text : "").toBe("/tmp");
+    expect(events[1]?.type === "final_text" ? events[1].text : "").toBe("done");
   });
 
-  it("maps explicit errors and final events", () => {
+  it("maps explicit codex errors", () => {
     const events = normalizeRuntimeChunk(
       "codex",
       "task1",
-      '{"type":"error","error":"boom"}\n{"type":"final","text":"done"}\n'
+      '{"type":"error","error":"boom"}\n{"type":"item.completed","item":{"id":"item_1","type":"error","message":"bad"}}\n'
     );
-    expect(events.map((event) => event.type)).toEqual(["error", "final_text"]);
+    expect(events.map((event) => event.type)).toEqual(["error", "error"]);
     expect(events[0]?.type === "error" ? events[0].text : "").toContain("boom");
   });
 
@@ -66,8 +72,8 @@ describe("normalizeRuntimeChunk", () => {
       ].join("\n")
     );
     expect(events).toHaveLength(1);
-    expect(events[0]?.type).toBe("partial_text");
-    expect(events[0]?.type === "partial_text" ? events[0].text : "").toContain("真正结果");
+    expect(events[0]?.type).toBe("final_text");
+    expect(events[0]?.type === "final_text" ? events[0].text : "").toContain("真正结果");
   });
 
   it("extracts codex agent_message text and drops turn completion stats", () => {
