@@ -152,4 +152,51 @@ describe("telegram command handling", () => {
 
     expect(messages.at(-1)).toBe("未知命令，使用 /help 查看帮助。");
   });
+
+  it("shows model usage on bare /model and applies model to current runtime", async () => {
+    const userId = "10004";
+    const chatId = userId;
+    const app = await createIsolatedApp(userId);
+    const messages: string[] = [];
+    app.telegram = {
+      sendMessage: async (_chatId: string, text: string) => {
+        messages.push(text);
+        return { message_id: messages.length };
+      },
+      editMessageText: async () => ({ message_id: 1 }),
+      sendTyping: async () => true
+    };
+
+    await app.createInstance("codex");
+    await app.handleUpdate(makeTelegramUpdate(4, userId, chatId, "/model"));
+    await app.handleUpdate(makeTelegramUpdate(5, userId, chatId, "/model gpt-5"));
+
+    expect(messages[0]).toContain("当前 runtime: codex");
+    expect(messages[0]).toContain("/model <model>");
+    expect(messages[1]).toContain("已设置 codex 模型：gpt-5");
+    expect(app.config.runtimes.codex.defaultArgs).toEqual(["--model", "gpt-5"]);
+  });
+
+  it("supports /model default to clear model arg", async () => {
+    const userId = "10005";
+    const chatId = userId;
+    const app = await createIsolatedApp(userId);
+    const messages: string[] = [];
+    app.telegram = {
+      sendMessage: async (_chatId: string, text: string) => {
+        messages.push(text);
+        return { message_id: messages.length };
+      },
+      editMessageText: async () => ({ message_id: 1 }),
+      sendTyping: async () => true
+    };
+
+    await app.createInstance("claude");
+    await app.handleUpdate(makeTelegramUpdate(6, userId, chatId, "/model claude opus"));
+    await app.handleUpdate(makeTelegramUpdate(7, userId, chatId, "/model default"));
+
+    expect(messages[0]).toContain("已设置 claude 模型：opus");
+    expect(messages[1]).toContain("已清除 claude 模型参数");
+    expect(app.config.runtimes.claude.defaultArgs).toEqual([]);
+  });
 });

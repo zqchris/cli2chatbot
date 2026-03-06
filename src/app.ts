@@ -34,7 +34,7 @@ const TELEGRAM_NATIVE_COMMANDS = [
   { command: "args", description: "查看运行参数" },
   { command: "setargs", description: "设置参数: /setargs <runtime> <args>" },
   { command: "clearargs", description: "清空参数: /clearargs <runtime>" },
-  { command: "model", description: "设置模型: /model <runtime> <name>" },
+  { command: "model", description: "设置模型: /model [runtime] <name>" },
   { command: "restart", description: "重建当前实例" },
   { command: "stop", description: "停止当前任务" },
   { command: "reset", description: "重置当前实例上下文" },
@@ -284,7 +284,7 @@ export class BridgeApp {
           "/args [codex|claude]",
           "/setargs <runtime> <args...>",
           "/clearargs <runtime>",
-          "/model <runtime> <model>",
+          "/model [runtime] <model>",
           "/restart",
           "/stop",
           "/reset",
@@ -432,22 +432,60 @@ export class BridgeApp {
     }
 
     if (text === "/model" || text.startsWith("/model ")) {
-      const body = text.slice("/model ".length).trim();
-      const firstSpace = body.indexOf(" ");
-      if (firstSpace <= 0) {
-        await this.telegram.sendMessage(ctx.chatId, "用法：/model <codex|claude> <model>");
+      const body = text === "/model" ? "" : text.slice("/model ".length).trim();
+      const tokens = body ? parseShellStyleArgs(body) : [];
+      const firstToken = tokens[0] ?? "";
+      const tokenRuntime = this.parseRuntimeToken(firstToken);
+
+      let runtime: RuntimeKind | null = tokenRuntime;
+      let modelName = tokenRuntime ? tokens.slice(1).join(" ").trim() : tokens.join(" ").trim();
+
+      if (!runtime) {
+        const current = await this.supervisor.selectedInstance();
+        runtime = current?.runtime ?? null;
+      }
+
+      if (!runtime) {
+        await this.telegram.sendMessage(
+          ctx.chatId,
+          [
+            "当前没有实例，无法推断 runtime。",
+            "用法：/model <codex|claude> <model>",
+            "示例：/model claude opus",
+            "提示：先 /start_codex 或 /start_claude，再用 /model <model>。"
+          ].join("\n")
+        );
         return;
       }
-      const runtimeToken = body.slice(0, firstSpace).trim();
-      const modelName = body.slice(firstSpace + 1).trim();
-      const runtime = this.parseRuntimeToken(runtimeToken);
-      if (!runtime || !modelName) {
-        await this.telegram.sendMessage(ctx.chatId, "用法：/model <codex|claude> <model>");
+
+      if (!modelName) {
+        const currentModel = readModelArg(this.config.runtimes[runtime].defaultArgs) ?? "(default)";
+        await this.telegram.sendMessage(
+          ctx.chatId,
+          [
+            `当前 runtime: ${runtime}`,
+            `当前模型参数: ${currentModel}`,
+            "用法：",
+            `- /model <model>（作用于当前 runtime=${runtime}）`,
+            "- /model <codex|claude> <model>",
+            "- /model default（清除 --model，回到 CLI 默认）",
+            "示例：/model opus"
+          ].join("\n")
+        );
         return;
       }
-      const nextArgs = upsertModelArg(this.config.runtimes[runtime].defaultArgs, modelName);
+
+      const resolvedModel = normalizeModelInput(modelName);
+      const nextArgs = resolvedModel === null
+        ? removeModelArg(this.config.runtimes[runtime].defaultArgs)
+        : upsertModelArg(this.config.runtimes[runtime].defaultArgs, resolvedModel);
       await this.setRuntimeArgs(runtime, nextArgs);
-      await this.telegram.sendMessage(ctx.chatId, `已设置 ${runtime} 模型：${modelName}`);
+      await this.telegram.sendMessage(
+        ctx.chatId,
+        resolvedModel === null
+          ? `已清除 ${runtime} 模型参数，恢复 CLI 默认模型。`
+          : `已设置 ${runtime} 模型：${resolvedModel}`
+      );
       return;
     }
 
@@ -918,6 +956,10 @@ function parseShellStyleArgs(input: string): string[] {
 }
 
 function upsertModelArg(args: string[], modelName: string): string[] {
+  return ["--model", modelName, ...removeModelArg(args)];
+}
+
+function removeModelArg(args: string[]): string[] {
   const next: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
     const token = args[i] ?? "";
@@ -927,7 +969,28 @@ function upsertModelArg(args: string[], modelName: string): string[] {
     }
     next.push(token);
   }
-  return ["--model", modelName, ...next];
+  return next;
+}
+
+function readModelArg(args: string[]): string | null {
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i] ?? "";
+    if ((token === "--model" || token === "-m") && typeof args[i + 1] === "string") {
+      return args[i + 1] as string;
+    }
+  }
+  return null;
+}
+
+function normalizeModelInput(modelName: string): string | null {
+  const normalized = modelName.trim();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === "default" || normalized === "auto") {
+    return null;
+  }
+  return normalized;
 }
 
 async function assertPortAvailable(host: string, port: number): Promise<void> {
