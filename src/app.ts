@@ -741,7 +741,7 @@ export class BridgeApp {
         const terminalText = event.code === 0
           ? (finalText || draftText || `[success] task=${event.taskId}`)
           : `${finalText || draftText || "任务失败。"}\n\n[failed] task=${event.taskId}`;
-        await this.publishTerminalMessage(ctx.chatId, ack.message_id, terminalText);
+        await this.publishTerminalMessage(ctx.chatId, ack.message_id, terminalText, ctx.messageId ?? undefined);
       }
     });
 
@@ -763,22 +763,57 @@ export class BridgeApp {
     return;
   }
 
-  private async publishTerminalMessage(chatId: string, messageId: number, rawText: string): Promise<void> {
+  private async publishTerminalMessage(
+    chatId: string,
+    messageId: number,
+    rawText: string,
+    replyToMessageId?: number
+  ): Promise<void> {
+    const chunks = splitTelegramMessageChunks(rawText);
+    const [firstChunk, ...restChunks] = chunks;
+    await this.deliverTelegramFinalChunk(chatId, firstChunk ?? "运行中...", { messageId, replyToMessageId });
+    for (const chunk of restChunks) {
+      await this.deliverTelegramFinalChunk(chatId, chunk, { replyToMessageId });
+    }
+  }
+
+  private async deliverTelegramFinalChunk(
+    chatId: string,
+    rawText: string,
+    options: { messageId?: number; replyToMessageId?: number } = {}
+  ): Promise<void> {
     const formatted = formatTelegramFinalDelivery(rawText);
     try {
-      await this.telegram.editMessageText(chatId, messageId, formatted.text, {
-        parseMode: formatted.parseMode
-      });
+      if (options.messageId) {
+        await this.telegram.editMessageText(chatId, options.messageId, formatted.text, {
+          parseMode: formatted.parseMode
+        });
+      } else {
+        await this.telegram.sendMessage(chatId, formatted.text, {
+          parseMode: formatted.parseMode,
+          replyToMessageId: options.replyToMessageId
+        });
+      }
       return;
     } catch {
       if (formatted.parseMode) {
         const plain = stripSimpleMarkdown(formatted.fallbackPlain);
-        await this.telegram.editMessageText(chatId, messageId, plain).catch(async () => {
-          await this.telegram.sendMessage(chatId, plain);
-        });
+        if (options.messageId) {
+          await this.telegram.editMessageText(chatId, options.messageId, plain).catch(async () => {
+            await this.telegram.sendMessage(chatId, plain, {
+              replyToMessageId: options.replyToMessageId
+            });
+          });
+        } else {
+          await this.telegram.sendMessage(chatId, plain, {
+            replyToMessageId: options.replyToMessageId
+          });
+        }
         return;
       }
-      await this.telegram.sendMessage(chatId, formatted.text);
+      await this.telegram.sendMessage(chatId, formatted.text, {
+        replyToMessageId: options.replyToMessageId
+      });
     }
   }
 
@@ -854,10 +889,7 @@ type TelegramFinalDelivery = {
 };
 
 function formatTelegramFinalDelivery(rawText: string): TelegramFinalDelivery {
-  const plain = truncateForTelegram(rawText, 3500);
-  if (plain.includes("[输出过长")) {
-    return { text: stripSimpleMarkdown(plain), fallbackPlain: plain };
-  }
+  const plain = rawText.trim() || "运行中...";
   const rendered = renderSimpleMarkdownToTelegramHtml(plain);
   if (!rendered.usedFormatting) {
     return { text: plain, fallbackPlain: plain };
@@ -870,6 +902,107 @@ function formatTelegramFinalDelivery(rawText: string): TelegramFinalDelivery {
     parseMode: "HTML",
     fallbackPlain: plain
   };
+}
+
+export function splitTelegramMessageChunks(input: string, maxLen = 3800): string[] {
+  const normalized = input.replace(/\r\n/g, "\n").trim() || "运行中...";
+  if (normalized.length <= maxLen) {
+    return [normalized];
+  }
+
+  const chunks: string[] = [];
+  let current = "";
+  for (const block of tokenizeTelegramBlocks(normalized)) {
+    const parts = splitOversizedTelegramBlock(block, maxLen);
+    for (const part of parts) {
+      if (!current) {
+        current = part;
+        continue;
+      }
+      const joined = `${current}\n${part}`;
+      if (joined.length <= maxLen) {
+        current = joined;
+        continue;
+      }
+      chunks.push(current);
+      current = part;
+    }
+  }
+
+  if (current) {
+    chunks.push(current);
+  }
+  return chunks;
+}
+
+function tokenizeTelegramBlocks(input: string): string[] {
+  const blocks: string[] = [];
+  const codeBlockRegex = /```[\s\S]*?```/g;
+  let cursor = 0;
+  let match = codeBlockRegex.exec(input);
+  while (match) {
+    const before = input.slice(cursor, match.index).trim();
+    if (before) {
+      blocks.push(before);
+    }
+    blocks.push(match[0]);
+    cursor = match.index + match[0].length;
+    match = codeBlockRegex.exec(input);
+  }
+  const tail = input.slice(cursor).trim();
+  if (tail) {
+    blocks.push(tail);
+  }
+  return blocks;
+}
+
+function splitOversizedTelegramBlock(block: string, maxLen: number): string[] {
+  if (block.length <= maxLen) {
+    return [block];
+  }
+  if (block.startsWith("```") && block.endsWith("```")) {
+    return splitTelegramCodeBlock(block, maxLen);
+  }
+  return splitTelegramTextBlock(block, maxLen);
+}
+
+function splitTelegramTextBlock(text: string, maxLen: number): string[] {
+  const parts: string[] = [];
+  let rest = text.trim();
+  while (rest.length > maxLen) {
+    const slice = rest.slice(0, maxLen);
+    const breakAt = preferredTelegramBreakIndex(slice);
+    parts.push(rest.slice(0, breakAt).trimEnd());
+    rest = rest.slice(breakAt).trimStart();
+  }
+  if (rest) {
+    parts.push(rest);
+  }
+  return parts;
+}
+
+function splitTelegramCodeBlock(block: string, maxLen: number): string[] {
+  const match = block.match(/^```([^\n`]*)\n?([\s\S]*?)```$/);
+  if (!match) {
+    return splitTelegramTextBlock(block, maxLen);
+  }
+
+  const language = match[1] ?? "";
+  const body = match[2] ?? "";
+  const openFence = `\`\`\`${language}\n`;
+  const closeFence = "\n```";
+  const innerMax = Math.max(1, maxLen - openFence.length - closeFence.length);
+  const innerChunks = splitTelegramTextBlock(body.trim(), innerMax);
+  return innerChunks.map((chunk) => `${openFence}${chunk}\n\`\`\``);
+}
+
+function preferredTelegramBreakIndex(slice: string): number {
+  const candidates = [slice.lastIndexOf("\n\n"), slice.lastIndexOf("\n"), slice.lastIndexOf(" ")].filter((idx) => idx > 0);
+  const best = Math.max(...candidates, -1);
+  if (best >= Math.floor(slice.length * 0.4)) {
+    return best;
+  }
+  return slice.length;
 }
 
 function renderSimpleMarkdownToTelegramHtml(input: string): { html: string; usedFormatting: boolean } {

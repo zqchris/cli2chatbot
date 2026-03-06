@@ -137,6 +137,64 @@ describe("telegram command handling", () => {
     expect(editedTexts.at(-1)).toContain("自动路由成功");
   });
 
+  it("sends long final output across multiple telegram messages", async () => {
+    const userId = "10008";
+    const chatId = userId;
+    const app = await createIsolatedApp(userId);
+    const sentTexts: string[] = [];
+    const sentOptions: Array<Record<string, unknown> | undefined> = [];
+    const editedTexts: string[] = [];
+    const longText = [
+      "结果如下：",
+      "",
+      "```ts",
+      ...Array.from({ length: 260 }, (_, index) => `const value${index} = ${index};`),
+      "```",
+      "",
+      "结束。"
+    ].join("\n");
+
+    app.telegram = {
+      sendMessage: async (_chatId: string, text: string, options?: Record<string, unknown>) => {
+        sentTexts.push(text);
+        sentOptions.push(options);
+        return { message_id: sentTexts.length };
+      },
+      editMessageText: async (_chatId: string, _messageId: number, text: string) => {
+        editedTexts.push(text);
+        return { message_id: 1 };
+      },
+      sendTyping: async () => true
+    };
+
+    app.supervisor = {
+      selectedInstance: async () => ({
+        instanceId: "inst-codex-2",
+        runtime: "codex",
+        status: "idle",
+        cwd: process.cwd()
+      }),
+      ask: async (
+        _instanceId: string,
+        _prompt: string,
+        onEvent: (event: { type: string; taskId: string; text?: string; code?: number | null; timestamp: string }) => Promise<void>
+      ) => {
+        const timestamp = new Date().toISOString();
+        await onEvent({ type: "task_started", taskId: "task-2", timestamp });
+        await onEvent({ type: "final_text", taskId: "task-2", text: longText, timestamp });
+        await onEvent({ type: "exit", taskId: "task-2", code: 0, timestamp });
+        return { taskId: "task-2" };
+      }
+    };
+
+    await app.handleUpdate(makeTelegramUpdate(10, userId, chatId, "输出长结果"));
+
+    expect(editedTexts).not.toHaveLength(0);
+    expect(sentTexts.length).toBeGreaterThan(1);
+    expect(sentOptions[0]).toMatchObject({ replyToMessageId: 10 });
+    expect(sentOptions.slice(1).every((options) => options?.replyToMessageId === 10)).toBe(true);
+  });
+
   it("keeps unknown slash command behavior", async () => {
     const userId = "10003";
     const chatId = userId;

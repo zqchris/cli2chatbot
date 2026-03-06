@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../src/domain/types.js";
-import { formatTelegramDisplayChunk, mergeDraftText } from "../src/app.js";
+import { formatTelegramDisplayChunk, mergeDraftText, splitTelegramMessageChunks } from "../src/app.js";
 
 function eventOf(event: Omit<StreamEvent, "taskId" | "timestamp">): StreamEvent {
   return {
@@ -43,5 +43,26 @@ describe("telegram stream preview", () => {
     );
 
     expect(preview).toBe("真正结果");
+  });
+
+  it("splits long markdown output without breaking fenced code blocks", () => {
+    const chunks = splitTelegramMessageChunks(
+      [
+        "第一段说明",
+        "",
+        "```ts",
+        ...Array.from({ length: 40 }, (_, index) => `const line${index} = ${index};`),
+        "```",
+        "",
+        "最后总结"
+      ].join("\n"),
+      180
+    );
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      const fenceCount = (chunk.match(/```/g) ?? []).length;
+      expect(fenceCount % 2).toBe(0);
+    }
   });
 });
