@@ -310,7 +310,7 @@ export class BridgeApp {
         await this.handleTelegramTaskEvent(ctx.chatId, ack.message_id, instance.instanceId, event);
         const displayChunk = formatTelegramDisplayChunk(event);
         if (displayChunk) {
-          draftText = [draftText, displayChunk].filter(Boolean).join("\n\n").trim();
+          draftText = mergeDraftText(draftText, displayChunk, event.type);
           draft.update(draftText);
         }
         if (event.type === "final_text" && event.text.trim()) {
@@ -428,20 +428,23 @@ function formatTelegramDisplayChunk(event: StreamEvent): string | null {
   if (event.type === "status") {
     return null;
   }
+  if (event.type === "final_text") {
+    return null;
+  }
   if (event.type === "tool_event") {
     return sanitizeDisplayText(event.text, true);
   }
-  if (event.type === "partial_text" || event.type === "final_text" || event.type === "error") {
+  if (event.type === "partial_text" || event.type === "error") {
     return sanitizeDisplayText(event.text, false);
   }
   return null;
 }
 
 function sanitizeDisplayText(input: string, fromTool: boolean): string | null {
-  const text = input.trim();
-  if (!text) {
+  if (input.length === 0) {
     return null;
   }
+  const text = input.replace(/\r\n/g, "\n");
 
   const lower = text.toLowerCase();
   if (
@@ -456,18 +459,24 @@ function sanitizeDisplayText(input: string, fromTool: boolean): string | null {
 
   const lines = text
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
     .filter((line) => !line.includes("/node_modules/"))
     .filter((line) => !line.endsWith(".cjs"))
     .filter((line) => !line.endsWith(".LICENSE"));
 
-  if (lines.length === 0) {
+  if (lines.length === 0 || lines.every((line) => line.length === 0)) {
     return null;
   }
 
+  if (!fromTool) {
+    let mergedText = lines.join("\n");
+    if (mergedText.length > 2200) {
+      mergedText = `${mergedText.slice(0, 2100)}\n... (输出过长，已截断)`;
+    }
+    return mergedText;
+  }
+
   // Tool output can be very verbose; keep the first N lines only.
-  const maxLines = fromTool ? 16 : 24;
+  const maxLines = 16;
   const clipped = lines.slice(0, maxLines);
   const omitted = lines.length - clipped.length;
   let merged = clipped.join("\n");
@@ -479,6 +488,19 @@ function sanitizeDisplayText(input: string, fromTool: boolean): string | null {
     merged = `${merged.slice(0, 1100)}\n... (输出过长，已截断)`;
   }
   return merged.trim() || null;
+}
+
+function mergeDraftText(current: string, chunk: string, eventType: StreamEvent["type"]): string {
+  if (!chunk) {
+    return current;
+  }
+  if (eventType === "partial_text") {
+    return `${current}${chunk}`;
+  }
+  if (!current) {
+    return chunk;
+  }
+  return `${current.endsWith("\n") ? current : `${current}\n`}${chunk}`;
 }
 
 async function assertPortAvailable(host: string, port: number): Promise<void> {

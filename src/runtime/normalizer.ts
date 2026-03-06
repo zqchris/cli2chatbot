@@ -49,8 +49,8 @@ function normalizeClaudePayload(taskId: string, payload: Record<string, unknown>
     const eventType = String(event?.type ?? "").toLowerCase();
     if (eventType === "content_block_delta") {
       const delta = event?.delta as Record<string, unknown> | undefined;
-      const text = (getNestedText(delta?.text) ?? getNestedText(delta) ?? "").trim();
-      if (!text) {
+      const text = getNestedText(delta?.text) ?? getNestedText(delta) ?? "";
+      if (text.length === 0) {
         return null;
       }
       return { type: "partial_text", taskId, text, timestamp };
@@ -157,13 +157,13 @@ function normalizeLine(runtime: RuntimeKind, taskId: string, line: string, times
     }
     const type = classifyPayloadType(payload);
     const fallbackText = payload.error ? String(payload.error) : JSON.stringify(payload);
-    const text = (getNestedText(payload) ?? fallbackText).trim();
+    const text = getNestedText(payload) ?? fallbackText;
     return { type, taskId, text, timestamp };
   } catch {
     if (shouldIgnorePlainLine(runtime, line)) {
       return null;
     }
-    return { type: "partial_text", taskId, text: line.trim(), timestamp };
+    return { type: "partial_text", taskId, text: line, timestamp };
   }
 }
 
@@ -171,8 +171,7 @@ export function normalizeRuntimeChunk(runtime: RuntimeKind, taskId: string, chun
   const timestamp = new Date().toISOString();
   const lines = chunk
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+    .filter((line) => line.length > 0);
   if (lines.length === 0) {
     return [];
   }

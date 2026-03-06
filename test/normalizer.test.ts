@@ -32,6 +32,20 @@ describe("normalizeRuntimeChunk", () => {
     expect(events[1]?.type === "final_text" ? events[1].text : "").toBe("done");
   });
 
+  it("preserves claude whitespace delta chunks", () => {
+    const events = normalizeRuntimeChunk(
+      "claude",
+      "task1",
+      [
+        '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}}',
+        '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":" "}}}',
+        '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"world"}}}'
+      ].join("\n")
+    );
+    expect(events).toHaveLength(3);
+    expect(events[1]?.type === "partial_text" ? events[1].text : "").toBe(" ");
+  });
+
   it("falls back to partial_text for plain lines", () => {
     const events = normalizeRuntimeChunk("claude", "task1", "plain line\n");
     expect(events).toHaveLength(1);
