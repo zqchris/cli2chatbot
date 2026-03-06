@@ -378,75 +378,7 @@ export class BridgeApp {
         await this.telegram.sendMessage(ctx.chatId, "用法：/ask <prompt>");
         return;
       }
-      const instance = await this.supervisor.selectedInstance();
-      if (!instance) {
-        await this.telegram.sendMessage(ctx.chatId, "没有当前实例，请先 /start_codex 或 /start_claude。");
-        return;
-      }
-      const ack = await this.telegram.sendMessage(ctx.chatId, `已接收任务，正在发送到 ${instance.runtime}:${instance.instanceId} ...`);
-      let stopped = false;
-      let draftText = "";
-      let finalText = "";
-      let spinnerIndex = 0;
-      let toolSteps = 0;
-      const draft = createDraftStreamLoop({
-        throttleMs: 1200,
-        isStopped: () => stopped,
-        sendOrEditStreamMessage: async (nextText) => {
-          await this.telegram.editMessageText(ctx.chatId, ack.message_id, truncateForTelegram(nextText, 3500));
-          return true;
-        }
-      });
-
-      const ticker = setInterval(() => {
-        void this.telegram.sendTyping(ctx.chatId).catch(() => undefined);
-        if (!draftText) {
-          spinnerIndex += 1;
-          const elapsed = spinnerIndex * 4;
-          const frame = loadingFrame(spinnerIndex);
-          const stepText = toolSteps > 0 ? ` · steps ${toolSteps}` : "";
-          void this.telegram.editMessageText(
-            ctx.chatId,
-            ack.message_id,
-            `已接收任务，正在发送到 ${instance.runtime}:${instance.instanceId} ... ${frame} ${elapsed}s${stepText}`
-          ).catch(() => undefined);
-        }
-      }, 4000);
-
-      const task = await this.supervisor.ask(instance.instanceId, prompt, async (event) => {
-        await this.handleTelegramTaskEvent(ctx.chatId, ack.message_id, instance.instanceId, event);
-        if (event.type === "tool_event") {
-          toolSteps += 1;
-        }
-        const displayChunk = formatTelegramDisplayChunk(event);
-        if (displayChunk) {
-          draftText = mergeDraftText(draftText, displayChunk, event.type);
-          draft.update(draftText);
-        }
-        if (event.type === "final_text" && event.text.trim()) {
-          finalText = sanitizeFinalTelegramText(event.text) ?? event.text.trim();
-        }
-        if (event.type === "error" && event.text.trim()) {
-          finalText = sanitizeFinalTelegramText(event.text) ?? event.text.trim();
-        }
-        if (event.type === "exit") {
-          stopped = true;
-          clearInterval(ticker);
-          await draft.flush();
-          const terminalText = event.code === 0
-            ? (finalText || draftText || `[success] task=${event.taskId}`)
-            : `${finalText || draftText || "任务失败。"}\n\n[failed] task=${event.taskId}`;
-          await this.publishTerminalMessage(ctx.chatId, ack.message_id, terminalText);
-        }
-      });
-
-      const stateForBinding = await this.store.read();
-      const target = stateForBinding.instances.find((candidate) => candidate.instanceId === instance.instanceId);
-      if (target) {
-        target.telegramMessageBinding = { chatId: ctx.chatId, messageId: ack.message_id };
-        target.currentTaskId = task.taskId;
-        await this.store.write(stateForBinding);
-      }
+      await this.startTelegramAskTask(ctx, prompt);
       return;
     }
 
@@ -565,7 +497,84 @@ export class BridgeApp {
       return;
     }
 
+    if (!text.startsWith("/")) {
+      await this.startTelegramAskTask(ctx, text);
+      return;
+    }
+
     await this.telegram.sendMessage(ctx.chatId, "未知命令，使用 /help 查看帮助。");
+  }
+
+  private async startTelegramAskTask(ctx: TelegramContext, prompt: string): Promise<void> {
+    const instance = await this.supervisor.selectedInstance();
+    if (!instance) {
+      await this.telegram.sendMessage(ctx.chatId, "没有当前实例，请先 /start_codex 或 /start_claude。");
+      return;
+    }
+    const ack = await this.telegram.sendMessage(ctx.chatId, `已接收任务，正在发送到 ${instance.runtime}:${instance.instanceId} ...`);
+    let stopped = false;
+    let draftText = "";
+    let finalText = "";
+    let spinnerIndex = 0;
+    let toolSteps = 0;
+    const draft = createDraftStreamLoop({
+      throttleMs: 1200,
+      isStopped: () => stopped,
+      sendOrEditStreamMessage: async (nextText) => {
+        await this.telegram.editMessageText(ctx.chatId, ack.message_id, truncateForTelegram(nextText, 3500));
+        return true;
+      }
+    });
+
+    const ticker = setInterval(() => {
+      void this.telegram.sendTyping(ctx.chatId).catch(() => undefined);
+      if (!draftText) {
+        spinnerIndex += 1;
+        const elapsed = spinnerIndex * 4;
+        const frame = loadingFrame(spinnerIndex);
+        const stepText = toolSteps > 0 ? ` · steps ${toolSteps}` : "";
+        void this.telegram.editMessageText(
+          ctx.chatId,
+          ack.message_id,
+          `已接收任务，正在发送到 ${instance.runtime}:${instance.instanceId} ... ${frame} ${elapsed}s${stepText}`
+        ).catch(() => undefined);
+      }
+    }, 4000);
+
+    const task = await this.supervisor.ask(instance.instanceId, prompt, async (event) => {
+      await this.handleTelegramTaskEvent(ctx.chatId, ack.message_id, instance.instanceId, event);
+      if (event.type === "tool_event") {
+        toolSteps += 1;
+      }
+      const displayChunk = formatTelegramDisplayChunk(event);
+      if (displayChunk) {
+        draftText = mergeDraftText(draftText, displayChunk, event.type);
+        draft.update(draftText);
+      }
+      if (event.type === "final_text" && event.text.trim()) {
+        finalText = sanitizeFinalTelegramText(event.text) ?? event.text.trim();
+      }
+      if (event.type === "error" && event.text.trim()) {
+        finalText = sanitizeFinalTelegramText(event.text) ?? event.text.trim();
+      }
+      if (event.type === "exit") {
+        stopped = true;
+        clearInterval(ticker);
+        await draft.flush();
+        const terminalText = event.code === 0
+          ? (finalText || draftText || `[success] task=${event.taskId}`)
+          : `${finalText || draftText || "任务失败。"}\n\n[failed] task=${event.taskId}`;
+        await this.publishTerminalMessage(ctx.chatId, ack.message_id, terminalText);
+      }
+    });
+
+    const stateForBinding = await this.store.read();
+    const target = stateForBinding.instances.find((candidate) => candidate.instanceId === instance.instanceId);
+    if (target) {
+      target.telegramMessageBinding = { chatId: ctx.chatId, messageId: ack.message_id };
+      target.currentTaskId = task.taskId;
+      await this.store.write(stateForBinding);
+    }
   }
 
   private async handleTelegramTaskEvent(

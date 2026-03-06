@@ -84,4 +84,72 @@ describe("telegram command handling", () => {
     expect(messages.at(-1)).toContain(created.instanceId);
     expect(messages.at(-1)).not.toContain("未知命令");
   });
+
+  it("routes plain text to current instance ask flow", async () => {
+    const userId = "10002";
+    const chatId = userId;
+    const app = await createIsolatedApp(userId);
+    const sentTexts: string[] = [];
+    const editedTexts: string[] = [];
+    const askCalls: Array<{ instanceId: string; prompt: string }> = [];
+    app.telegram = {
+      sendMessage: async (_chatId: string, text: string) => {
+        sentTexts.push(text);
+        return { message_id: 1 };
+      },
+      editMessageText: async (_chatId: string, _messageId: number, text: string) => {
+        editedTexts.push(text);
+        return { message_id: 1 };
+      },
+      sendTyping: async () => true
+    };
+
+    app.supervisor = {
+      selectedInstance: async () => ({
+        instanceId: "inst-codex-1",
+        runtime: "codex",
+        status: "idle",
+        cwd: process.cwd()
+      }),
+      ask: async (
+        instanceId: string,
+        prompt: string,
+        onEvent: (event: { type: string; taskId: string; text?: string; code?: number | null; timestamp: string }) => Promise<void>
+      ) => {
+        askCalls.push({ instanceId, prompt });
+        const timestamp = new Date().toISOString();
+        await onEvent({ type: "task_started", taskId: "task-1", timestamp });
+        await onEvent({ type: "final_text", taskId: "task-1", text: "自动路由成功", timestamp });
+        await onEvent({ type: "exit", taskId: "task-1", code: 0, timestamp });
+        return { taskId: "task-1" };
+      }
+    };
+
+    await app.handleUpdate(makeTelegramUpdate(2, userId, chatId, "帮我看看当前仓库结构"));
+
+    expect(askCalls).toHaveLength(1);
+    expect(askCalls[0]?.instanceId).toBe("inst-codex-1");
+    expect(askCalls[0]?.prompt).toBe("帮我看看当前仓库结构");
+    expect(sentTexts[0]).toContain("已接收任务，正在发送到 codex:inst-codex-1");
+    expect(editedTexts.at(-1)).toContain("自动路由成功");
+  });
+
+  it("keeps unknown slash command behavior", async () => {
+    const userId = "10003";
+    const chatId = userId;
+    const app = await createIsolatedApp(userId);
+    const messages: string[] = [];
+    app.telegram = {
+      sendMessage: async (_chatId: string, text: string) => {
+        messages.push(text);
+        return { message_id: 1 };
+      },
+      editMessageText: async () => ({ message_id: 1 }),
+      sendTyping: async () => true
+    };
+
+    await app.handleUpdate(makeTelegramUpdate(3, userId, chatId, "/unknown"));
+
+    expect(messages.at(-1)).toBe("未知命令，使用 /help 查看帮助。");
+  });
 });
